@@ -1,6 +1,13 @@
 import * as http from "node:http";
+import * as path from "node:path";
 import { URL } from "node:url";
 
+import { FileAdapterEngine } from "../adapters/file-sync";
+import {
+  BUILTIN_ADAPTER_PROFILES,
+  listPrimaryIdeProfiles,
+  type AdapterSyncMode
+} from "../adapters/profiles";
 import type { ConflictPolicy } from "../core/conflict-resolution";
 import { ContextService } from "../core/context-service";
 import type { CreateContextInput, SearchContextFilters, UpdateContextInput } from "../core/types";
@@ -9,6 +16,7 @@ import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from "./protocol";
 export interface DaemonServerOptions {
   host?: string;
   port?: number;
+  dataDir?: string;
 }
 
 function sendJson(res: http.ServerResponse, statusCode: number, body: unknown): void {
@@ -61,12 +69,44 @@ function parseOptionalInt(value: string | null): number | undefined {
   return parsed;
 }
 
+function parseFocus(value: string | null): "all" | "primary" {
+  const normalized = (value ?? "primary").trim().toLowerCase();
+
+  if (normalized === "all" || normalized === "primary") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid focus: ${value}. Expected all or primary.`);
+}
+
+function parseSyncMode(value: string | null): AdapterSyncMode | undefined {
+  if (value === null || value.trim() === "") {
+    return undefined;
+  }
+
+  if (value === "file-sync" || value === "mcp") {
+    return value;
+  }
+
+  throw new Error(`Invalid syncMode: ${value}. Expected file-sync or mcp.`);
+}
+
+function parseBooleanFlag(value: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 export async function startDaemonServer(
   service: ContextService,
   options: DaemonServerOptions = {}
 ): Promise<http.Server> {
   const host = options.host ?? DEFAULT_DAEMON_HOST;
   const port = options.port ?? DEFAULT_DAEMON_PORT;
+  const dataDir = options.dataDir;
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -152,6 +192,73 @@ export async function startDaemonServer(
 
         const result = await service.importSnapshot(body.snapshot, body.policy ?? "lww");
         sendJson(res, 200, { ok: true, result });
+        return;
+      }
+
+      if (pathname === "/connectors/status" && method === "GET") {
+        const syncMode = parseSyncMode(url.searchParams.get("syncMode"));
+        const compact = parseBooleanFlag(url.searchParams.get("compact"));
+        const requestedAdapterFiles = url.searchParams
+          .getAll("adapterFile")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0);
+
+        const effectiveDataDir = dataDir ?? process.cwd();
+        const engine = new FileAdapterEngine(effectiveDataDir);
+
+        const statuses =
+          requestedAdapterFiles.length > 0
+            ? requestedAdapterFiles.map((adapterFile) => ({
+                expectedProfileId: undefined,
+                expectedProfileName: undefined,
+                expectedTool: undefined,
+                expectedSyncMode: undefined,
+                ...engine.getAdapterStatus(path.resolve(adapterFile))
+              }))
+            : (parseFocus(url.searchParams.get("focus")) === "primary"
+                ? listPrimaryIdeProfiles(syncMode)
+                : BUILTIN_ADAPTER_PROFILES.filter(
+                    (profile) => !syncMode || profile.syncMode === syncMode
+                  )
+              ).map((profile) => ({
+                expectedProfileId: profile.id,
+                expectedProfileName: profile.name,
+                expectedTool: profile.tool,
+                expectedSyncMode: profile.syncMode,
+                ...engine.getAdapterStatus(
+                  path.join(effectiveDataDir, profile.suggestedPath, "pluro.adapter.json")
+                )
+              }));
+
+        const summary = {
+          total: statuses.length,
+          healthy: statuses.filter((status) => status.health === "healthy").length,
+          warning: statuses.filter((status) => status.health === "warning").length,
+          error: statuses.filter((status) => status.health === "error").length
+        };
+
+        const payload = {
+          ok: true,
+          outputDir: effectiveDataDir,
+          syncMode: syncMode ?? "all",
+          compact,
+          checkedAt: new Date().toISOString(),
+          summary,
+          statuses: compact
+            ? statuses.map((status) => ({
+                adapterFile: status.adapterFile,
+                profileId: status.profileId,
+                expectedProfileId: status.expectedProfileId,
+                tool: status.tool,
+                syncMode: status.syncMode,
+                health: status.health,
+                issues: [...status.errors, ...status.warnings],
+                checkedAt: status.checkedAt
+              }))
+            : statuses
+        };
+
+        sendJson(res, 200, payload);
         return;
       }
 

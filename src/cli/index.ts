@@ -118,6 +118,10 @@ interface DaemonRunCliOptions {
 interface DaemonStatusCliOptions {
   host: string;
   port: string;
+  connectors?: boolean;
+  focus: string;
+  syncMode?: string;
+  compact?: boolean;
 }
 
 interface SyncRetryOptions {
@@ -990,10 +994,10 @@ daemonCommand
   .option("--host <host>", "Host to bind", DEFAULT_DAEMON_HOST)
   .option("--port <number>", "Port to bind", String(DEFAULT_DAEMON_PORT))
   .action(async (options: DaemonRunCliOptions, command: Command) => {
-    await withService(command, async (service) => {
+    await withService(command, async (service, paths) => {
       const host = options.host;
       const port = parseIntValue(String(options.port), DEFAULT_DAEMON_PORT);
-      const server = await startDaemonServer(service, { host, port });
+      const server = await startDaemonServer(service, { host, port, dataDir: paths.dataDir });
 
       printJson({
         ok: true,
@@ -1018,10 +1022,31 @@ daemonCommand
   .description("Check daemon health endpoint")
   .option("--host <host>", "Host to query", DEFAULT_DAEMON_HOST)
   .option("--port <number>", "Port to query", String(DEFAULT_DAEMON_PORT))
+  .option("--connectors", "Fetch connector health summary", false)
+  .option("--focus <focus>", "all or primary for connector status", "primary")
+  .option("--sync-mode <mode>", "Filter connector status by sync mode: file-sync or mcp")
+  .option("--compact", "Compact connector status output", false)
   .action(async (options: DaemonStatusCliOptions) => {
     const host = options.host;
     const port = parseIntValue(String(options.port), DEFAULT_DAEMON_PORT);
-    const url = `http://${host}:${port}/health`;
+    const focus = parseConnectorFocus(options.focus);
+
+    let url = `http://${host}:${port}/health`;
+
+    if (options.connectors) {
+      const params = new URLSearchParams();
+      params.set("focus", focus);
+
+      if (options.syncMode) {
+        params.set("syncMode", parseAdapterSyncMode(options.syncMode));
+      }
+
+      if (options.compact) {
+        params.set("compact", "1");
+      }
+
+      url = `http://${host}:${port}/connectors/status?${params.toString()}`;
+    }
 
     try {
       const response = await fetch(url, {
@@ -1033,6 +1058,12 @@ daemonCommand
       }
 
       const payload = (await response.json()) as unknown;
+
+      if (options.connectors) {
+        printJson({ running: true, url, connectors: payload });
+        return;
+      }
+
       printJson({ running: true, url, health: payload });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to reach daemon";

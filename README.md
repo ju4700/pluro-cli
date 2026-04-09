@@ -82,6 +82,12 @@ Check daemon status:
 pluro daemon status --port 43111
 ```
 
+Check connector health through daemon status API:
+
+```bash
+pluro daemon status --port 43111 --connectors --focus primary --compact
+```
+
 Run MCP stdio server:
 
 ```bash
@@ -225,6 +231,11 @@ Environment variable alternative:
 - `history`
 - `connector list|status|bootstrap|init|sync|watch`
 - `daemon run|status|mcp`
+
+Daemon connector status endpoint:
+
+- `GET /connectors/status?focus=primary|all&syncMode=file-sync|mcp&compact=1`
+- `adapterFile` query param can be repeated to inspect explicit adapter files.
 
 ## Verification
 
