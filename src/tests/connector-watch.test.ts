@@ -22,7 +22,8 @@ function withTempDir(handler: (tempDir: string) => Promise<void> | void): Promis
 function startConnectorWatch(
   dataDir: string,
   adapterFile: string,
-  direction: "import" | "export"
+  direction: "import" | "export",
+  extraArgs: string[] = []
 ): ChildProcessWithoutNullStreams {
   const cliPath = path.join(process.cwd(), "dist", "cli", "index.js");
 
@@ -39,7 +40,8 @@ function startConnectorWatch(
       direction,
       "--debounce-ms",
       "120",
-      "--no-run-initial"
+      "--no-run-initial",
+      ...extraArgs
     ],
     {
       stdio: ["pipe", "pipe", "pipe"]
@@ -206,6 +208,43 @@ test("connector watch exports when local context changes", async () => {
 
       const snapshot = engine.readSnapshot(outbound);
       assert.ok(snapshot.entries.some((entry) => entry.content === "watch export content"));
+    } finally {
+      await stopProcess(proc);
+    }
+  });
+});
+
+test("connector watch quarantines invalid inbound snapshots", async () => {
+  await withTempDir(async (dataDir) => {
+    const engine = new FileAdapterEngine(dataDir);
+    const template = engine.createProfileTemplate("cursor-file");
+    const config = engine.readAdapterConfig(template.adapterFile);
+    const inbound = config.inboundSnapshotFile as string;
+
+    const proc = startConnectorWatch(dataDir, template.adapterFile, "import", [
+      "--max-retries",
+      "1",
+      "--retry-base-ms",
+      "50"
+    ]);
+
+    try {
+      await waitForOutput(proc, /"watching"\s*:\s*true/, 8000);
+
+      fs.writeFileSync(inbound, "{\n  \"version\": 1,\n  \"broken\": ", "utf8");
+
+      await waitForOutput(proc, /"event"\s*:\s*"import-sync-invalid-snapshot-recovered"/, 12000);
+
+      const quarantineDir = path.join(path.dirname(inbound), ".pluro-invalid");
+      assert.ok(fs.existsSync(quarantineDir));
+
+      const quarantinedFiles = fs.readdirSync(quarantineDir);
+      assert.ok(quarantinedFiles.length >= 1);
+      assert.ok(quarantinedFiles.some((name) => name.startsWith(path.basename(inbound))));
+
+      const recoveredSnapshot = engine.readSnapshot(inbound);
+      assert.equal(recoveredSnapshot.entries.length, 0);
+      assert.equal(recoveredSnapshot.history.length, 0);
     } finally {
       await stopProcess(proc);
     }

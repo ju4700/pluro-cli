@@ -182,10 +182,18 @@ Run continuous sync watch mode:
 pluro connector watch <path-to-adapter-json> --direction bidirectional
 ```
 
+Tune reliability behavior for active agent loops:
+
+```bash
+pluro connector watch <path-to-adapter-json> --direction import --max-retries 3 --retry-base-ms 200
+```
+
 Watch mode listens for:
 
 - inbound snapshot file writes for import direction
 - SQLite `context.db` and WAL/SHM sidecar file activity for export direction
+
+If an inbound snapshot is invalid JSON/schema, watch mode retries and then quarantines the bad file under `.pluro-invalid` (unless `--no-quarantine-invalid` is set).
 
 ## Global Options
 

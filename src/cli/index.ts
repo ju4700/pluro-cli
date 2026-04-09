@@ -16,7 +16,7 @@ import { ensureDataDirectory, resolvePaths, type PluroPaths } from "../core/conf
 import { ContextService } from "../core/context-service";
 import { EncryptionService } from "../core/security/encryption";
 import { SqliteStore } from "../core/storage/sqlite";
-import type { SearchContextFilters, UpdateContextInput } from "../core/types";
+import type { ContextSnapshot, SearchContextFilters, UpdateContextInput } from "../core/types";
 import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from "../daemon/protocol";
 import { runMcpStdioServer } from "../daemon/mcp-server";
 import { startDaemonServer } from "../daemon/server";
@@ -90,6 +90,9 @@ interface ConnectorSyncCliOptions {
 interface ConnectorWatchCliOptions {
   direction: string;
   debounceMs: string;
+  maxRetries: string;
+  retryBaseMs: string;
+  quarantineInvalid?: boolean;
   runInitial?: boolean;
 }
 
@@ -101,6 +104,23 @@ interface DaemonRunCliOptions {
 interface DaemonStatusCliOptions {
   host: string;
   port: string;
+}
+
+interface SyncRetryOptions {
+  maxRetries: number;
+  retryBaseMs: number;
+}
+
+interface SyncRetryEvent {
+  attempt: number;
+  retryInMs: number;
+  error: string;
+}
+
+interface InvalidInboundRecovery {
+  quarantinedFile: string;
+  movedOriginal: boolean;
+  resetInboundFile: boolean;
 }
 
 function printJson(payload: unknown): void {
@@ -169,6 +189,116 @@ function parseAdapterSyncMode(value: string): AdapterSyncMode {
   }
 
   throw new Error(`Invalid sync mode: ${value}. Expected file-sync or mcp.`);
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isInvalidSnapshotError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.name === "SyntaxError" || error.name === "ZodError";
+}
+
+function isRetryableSyncError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  if (isInvalidSnapshotError(error)) {
+    return true;
+  }
+
+  return /SQLITE_BUSY|database is locked|ENOENT|EACCES|EPERM|EBUSY/i.test(error.message);
+}
+
+function createEmptySnapshot(): ContextSnapshot {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    entries: [],
+    history: []
+  };
+}
+
+async function runWithRetry<T>(
+  operation: () => Promise<T>,
+  options: SyncRetryOptions,
+  onRetry: (event: SyncRetryEvent) => void
+): Promise<T> {
+  let retries = 0;
+
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isRetryableSyncError(error) || retries >= options.maxRetries) {
+        throw error;
+      }
+
+      const retryInMs = Math.max(20, options.retryBaseMs * 2 ** retries);
+      retries += 1;
+
+      onRetry({
+        attempt: retries,
+        retryInMs,
+        error: getErrorMessage(error)
+      });
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, retryInMs);
+      });
+    }
+  }
+}
+
+function quarantineInvalidInboundSnapshot(
+  engine: FileAdapterEngine,
+  inboundFile: string
+): InvalidInboundRecovery | null {
+  if (!fs.existsSync(inboundFile)) {
+    return null;
+  }
+
+  const quarantineDir = path.join(path.dirname(inboundFile), ".pluro-invalid");
+  fs.mkdirSync(quarantineDir, { recursive: true });
+
+  const stamp = new Date().toISOString().replace(/[.:]/g, "-");
+  const quarantinedFile = path.join(
+    quarantineDir,
+    `${path.basename(inboundFile)}.${stamp}.invalid.json`
+  );
+
+  let movedOriginal = false;
+
+  try {
+    fs.renameSync(inboundFile, quarantinedFile);
+    movedOriginal = true;
+  } catch {
+    try {
+      fs.copyFileSync(inboundFile, quarantinedFile);
+    } catch {
+      return null;
+    }
+  }
+
+  let resetInboundFile = false;
+
+  try {
+    engine.writeSnapshot(inboundFile, createEmptySnapshot());
+    resetInboundFile = true;
+  } catch {
+    resetInboundFile = false;
+  }
+
+  return {
+    quarantinedFile,
+    movedOriginal,
+    resetInboundFile
+  };
 }
 
 function includesImport(direction: SyncDirection): boolean {
@@ -589,10 +719,16 @@ connectorCommand
   .argument("<adapterFile>", "Path to adapter config JSON")
   .option("--direction <direction>", "import, export, or bidirectional", "bidirectional")
   .option("--debounce-ms <number>", "Debounce delay for file events", "500")
+  .option("--max-retries <number>", "Retry attempts for transient sync failures", "3")
+  .option("--retry-base-ms <number>", "Base delay in milliseconds for retry backoff", "200")
+  .option("--no-quarantine-invalid", "Do not quarantine invalid inbound snapshot files")
   .option("--no-run-initial", "Skip initial one-shot sync before watching")
   .action(async (adapterFile: string, options: ConnectorWatchCliOptions, command: Command) => {
     const direction = parseSyncDirection(String(options.direction));
     const debounceMs = parseIntValue(String(options.debounceMs), 500);
+    const maxRetries = Math.max(0, parseIntValue(String(options.maxRetries), 3));
+    const retryBaseMs = Math.max(20, parseIntValue(String(options.retryBaseMs), 200));
+    const quarantineInvalid = options.quarantineInvalid !== false;
     const runInitial = options.runInitial !== false;
 
     await withService(command, async (service, paths) => {
@@ -607,8 +743,29 @@ connectorCommand
       }
 
       if (runInitial) {
-        const initial = await runAdapterSyncOnce(service, engine, adapterFilePath, direction);
-        printJson({ event: "initial-sync", result: initial });
+        try {
+          const initial = await runWithRetry(
+            async () => runAdapterSyncOnce(service, engine, adapterFilePath, direction),
+            {
+              maxRetries,
+              retryBaseMs
+            },
+            (retryEvent) => {
+              printJson({
+                event: "initial-sync-retry",
+                direction,
+                attempt: retryEvent.attempt,
+                retryInMs: retryEvent.retryInMs,
+                error: retryEvent.error
+              });
+            }
+          );
+
+          printJson({ event: "initial-sync", result: initial });
+        } catch (error) {
+          const message = getErrorMessage(error);
+          printJson({ event: "initial-sync-error", error: message });
+        }
       }
 
       const stops: Array<() => void> = [];
@@ -623,10 +780,43 @@ connectorCommand
           inboundFile,
           async () => {
             try {
-              const result = await runAdapterSyncOnce(service, engine, adapterFilePath, "import");
+              const result = await runWithRetry(
+                async () => runAdapterSyncOnce(service, engine, adapterFilePath, "import"),
+                {
+                  maxRetries,
+                  retryBaseMs
+                },
+                (retryEvent) => {
+                  printJson({
+                    event: "import-sync-retry",
+                    file: inboundFile,
+                    attempt: retryEvent.attempt,
+                    retryInMs: retryEvent.retryInMs,
+                    error: retryEvent.error
+                  });
+                }
+              );
+
               printJson({ event: "import-sync", result });
             } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
+              const message = getErrorMessage(error);
+
+              if (quarantineInvalid && isInvalidSnapshotError(error)) {
+                const recovery = quarantineInvalidInboundSnapshot(engine, inboundFile);
+
+                if (recovery) {
+                  printJson({
+                    event: "import-sync-invalid-snapshot-recovered",
+                    file: inboundFile,
+                    quarantinedFile: recovery.quarantinedFile,
+                    movedOriginal: recovery.movedOriginal,
+                    resetInboundFile: recovery.resetInboundFile,
+                    error: message
+                  });
+                  return;
+                }
+              }
+
               printJson({ event: "import-sync-error", error: message });
             }
           },
@@ -644,10 +834,26 @@ connectorCommand
             filePath,
             async () => {
               try {
-                const result = await runAdapterSyncOnce(service, engine, adapterFilePath, "export");
+                const result = await runWithRetry(
+                  async () => runAdapterSyncOnce(service, engine, adapterFilePath, "export"),
+                  {
+                    maxRetries,
+                    retryBaseMs
+                  },
+                  (retryEvent) => {
+                    printJson({
+                      event: "export-sync-retry",
+                      triggerFile: filePath,
+                      attempt: retryEvent.attempt,
+                      retryInMs: retryEvent.retryInMs,
+                      error: retryEvent.error
+                    });
+                  }
+                );
+
                 printJson({ event: "export-sync", triggerFile: filePath, result });
               } catch (error) {
-                const message = error instanceof Error ? error.message : String(error);
+                const message = getErrorMessage(error);
                 printJson({ event: "export-sync-error", triggerFile: filePath, error: message });
               }
             },
@@ -664,6 +870,9 @@ connectorCommand
         adapterFile: adapterFilePath,
         direction,
         debounceMs,
+        maxRetries,
+        retryBaseMs,
+        quarantineInvalid,
         dbPath: paths.dbPath
       });
 
