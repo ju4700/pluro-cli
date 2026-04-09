@@ -206,6 +206,12 @@ Emit adapter health as a one-line summary:
 pluro connector status --focus primary --format summary
 ```
 
+Fail CI when connector status has errors:
+
+```bash
+pluro connector status --focus primary --format summary --fail-on-error
+```
+
 Check one adapter file explicitly:
 
 ```bash
@@ -266,6 +272,11 @@ Status command output formats:
 - `--format json` (default)
 - `--format table` for a compact terminal-friendly view
 - `--format summary` for machine-friendly one-line scripting output
+
+Status command failure flags:
+
+- `--fail-on-error` exits with code `1` when any errors are detected
+- `--fail-on-warning` exits with code `1` when warnings or errors are detected
 
 ## Verification
 

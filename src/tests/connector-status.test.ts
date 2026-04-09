@@ -144,3 +144,51 @@ test("connector status supports summary output format", () => {
     assert.ok(result.stdout.includes("overall=healthy"));
   });
 });
+
+test("connector status fail-on-error sets non-zero exit code", () => {
+  withTempDir((dataDir) => {
+    const result = runCli([
+      "--data-dir",
+      dataDir,
+      "connector",
+      "status",
+      "--focus",
+      "primary",
+      "--sync-mode",
+      "file-sync",
+      "--format",
+      "summary",
+      "--fail-on-error"
+    ]);
+
+    assert.equal(result.code, 1);
+    assert.ok(result.stdout.includes("overall=error"));
+  });
+});
+
+test("connector status fail-on-warning sets non-zero exit code", () => {
+  withTempDir((dataDir) => {
+    const engine = new FileAdapterEngine(dataDir);
+    const template = engine.createProfileTemplate("cursor-file");
+    const config = engine.readAdapterConfig(template.adapterFile);
+    const inbound = config.inboundSnapshotFile as string;
+
+    const quarantineDir = path.join(path.dirname(inbound), ".pluro-invalid");
+    fs.mkdirSync(quarantineDir, { recursive: true });
+    fs.writeFileSync(path.join(quarantineDir, "warning.snapshot.json"), "{}\n", "utf8");
+
+    const result = runCli([
+      "--data-dir",
+      dataDir,
+      "connector",
+      "status",
+      template.adapterFile,
+      "--format",
+      "summary",
+      "--fail-on-warning"
+    ]);
+
+    assert.equal(result.code, 1);
+    assert.ok(result.stdout.includes("overall=warning"));
+  });
+});

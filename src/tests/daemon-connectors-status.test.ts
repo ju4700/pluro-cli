@@ -321,3 +321,51 @@ test("daemon status command supports daemon health summary output", async () => 
     }
   });
 });
+
+test("daemon status command fail-on-error returns non-zero for connector issues", async () => {
+  await withTempDir(async (dataDir) => {
+    const store = new SqliteStore(path.join(dataDir, "context.db"));
+    const service = new ContextService(
+      store,
+      new EncryptionService({ passphrase: "daemon-test", disableKeychain: true })
+    );
+
+    service.init();
+
+    const server = await startDaemonServer(service, {
+      host: "127.0.0.1",
+      port: 0,
+      dataDir
+    });
+
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const port = (address as AddressInfo).port;
+
+      const result = await runCli([
+        "daemon",
+        "status",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        "--connectors",
+        "--focus",
+        "primary",
+        "--sync-mode",
+        "file-sync",
+        "--format",
+        "summary",
+        "--fail-on-error"
+      ]);
+
+      assert.equal(result.code, 1);
+      assert.ok(result.stdout.includes("connector_status"));
+      assert.ok(result.stdout.includes("overall=error"));
+    } finally {
+      await closeServer(server);
+      service.close();
+    }
+  });
+});

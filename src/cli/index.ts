@@ -88,6 +88,8 @@ interface ConnectorStatusCliOptions {
   syncMode?: string;
   outputDir?: string;
   format: string;
+  failOnWarning?: boolean;
+  failOnError?: boolean;
 }
 
 interface ConnectorStatusTarget {
@@ -163,6 +165,13 @@ interface DaemonStatusCliOptions {
   syncMode?: string;
   compact?: boolean;
   format: string;
+  failOnWarning?: boolean;
+  failOnError?: boolean;
+}
+
+interface StatusFailureOptions {
+  failOnWarning?: boolean;
+  failOnError?: boolean;
 }
 
 interface SyncRetryOptions {
@@ -284,6 +293,30 @@ function toOverallHealth(summary: ConnectorStatusSummary): "healthy" | "warning"
   }
 
   return "healthy";
+}
+
+function shouldFailStatusCheck(
+  summary: ConnectorStatusSummary,
+  options: StatusFailureOptions
+): boolean {
+  if (options.failOnError && summary.error > 0) {
+    return true;
+  }
+
+  if (options.failOnWarning && (summary.warning > 0 || summary.error > 0)) {
+    return true;
+  }
+
+  return false;
+}
+
+function applyStatusFailurePolicy(
+  summary: ConnectorStatusSummary,
+  options: StatusFailureOptions
+): void {
+  if (shouldFailStatusCheck(summary, options)) {
+    process.exitCode = 1;
+  }
 }
 
 function formatDaemonHealthTable(url: string, payload: DaemonHealthTablePayload): string {
@@ -895,6 +928,8 @@ connectorCommand
   .option("--sync-mode <mode>", "Filter discovered profiles by sync mode: file-sync or mcp")
   .option("--output-dir <path>", "Base directory for profile discovery")
   .option("--format <format>", "json, table, or summary", "json")
+  .option("--fail-on-warning", "Exit with code 1 when warnings or errors are detected", false)
+  .option("--fail-on-error", "Exit with code 1 when errors are detected", false)
   .action(
     (
       adapterFiles: string[] | undefined,
@@ -968,15 +1003,18 @@ connectorCommand
 
       if (outputFormat === "summary") {
         printText(formatConnectorStatusSummary(statusPayload));
+        applyStatusFailurePolicy(responsePayload.summary, options);
         return;
       }
 
       if (outputFormat === "table") {
         printText(formatConnectorStatusTable(statusPayload));
+        applyStatusFailurePolicy(responsePayload.summary, options);
         return;
       }
 
       printJson(responsePayload);
+      applyStatusFailurePolicy(responsePayload.summary, options);
     }
   );
 
@@ -1265,6 +1303,8 @@ daemonCommand
   .option("--sync-mode <mode>", "Filter connector status by sync mode: file-sync or mcp")
   .option("--compact", "Compact connector status output", false)
   .option("--format <format>", "json, table, or summary", "json")
+  .option("--fail-on-warning", "Exit with code 1 when connector status has warnings/errors", false)
+  .option("--fail-on-error", "Exit with code 1 when connector status has errors", false)
   .action(async (options: DaemonStatusCliOptions) => {
     const host = options.host;
     const port = parseIntValue(String(options.port), DEFAULT_DAEMON_PORT);
@@ -1317,15 +1357,18 @@ daemonCommand
 
         if (outputFormat === "summary") {
           printText(formatConnectorStatusSummary(statusPayload));
+          applyStatusFailurePolicy(statusPayload.summary, options);
           return;
         }
 
         if (outputFormat === "table") {
           printText(formatConnectorStatusTable(statusPayload));
+          applyStatusFailurePolicy(statusPayload.summary, options);
           return;
         }
 
         printJson({ running: true, url, connectors: payload });
+        applyStatusFailurePolicy(statusPayload.summary, options);
         return;
       }
 
