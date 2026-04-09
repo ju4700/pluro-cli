@@ -14,6 +14,46 @@ import {
 
 export type SyncDirection = "import" | "export" | "bidirectional";
 
+export type AdapterHealthLevel = "healthy" | "warning" | "error";
+
+export interface SnapshotFileStatus {
+  path: string;
+  exists: boolean;
+  valid: boolean;
+  entries: number;
+  exportedAt?: string;
+  lastModifiedAt?: string;
+  error?: string;
+}
+
+export interface FileSyncAdapterStatus {
+  inbound: SnapshotFileStatus;
+  outbound: SnapshotFileStatus;
+  quarantineDir: string;
+  quarantinedFilesCount: number;
+}
+
+export interface McpAdapterStatus {
+  command?: string;
+  args: string[];
+  commandFound: boolean;
+  commandPath?: string;
+}
+
+export interface AdapterStatus {
+  adapterFile: string;
+  configured: boolean;
+  profileId?: string;
+  tool?: string;
+  syncMode?: AdapterSyncMode;
+  health: AdapterHealthLevel;
+  warnings: string[];
+  errors: string[];
+  checkedAt: string;
+  fileSync?: FileSyncAdapterStatus;
+  mcp?: McpAdapterStatus;
+}
+
 const adapterConfigSchema = z
   .object({
     version: z.literal(1),
@@ -241,5 +281,231 @@ export class FileAdapterEngine {
     const payload = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(payload) as unknown;
     return contextSnapshotSchema.parse(parsed);
+  }
+
+  getAdapterStatus(adapterFilePath: string): AdapterStatus {
+    const resolvedAdapterFilePath = path.resolve(adapterFilePath);
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const checkedAt = new Date().toISOString();
+
+    if (!fs.existsSync(resolvedAdapterFilePath)) {
+      errors.push("Adapter file not found.");
+
+      return {
+        adapterFile: resolvedAdapterFilePath,
+        configured: false,
+        health: "error",
+        warnings,
+        errors,
+        checkedAt
+      };
+    }
+
+    let config: AdapterConfig;
+
+    try {
+      config = this.readAdapterConfig(resolvedAdapterFilePath);
+    } catch (error) {
+      errors.push(`Invalid adapter config: ${this.getErrorMessage(error)}`);
+
+      return {
+        adapterFile: resolvedAdapterFilePath,
+        configured: false,
+        health: "error",
+        warnings,
+        errors,
+        checkedAt
+      };
+    }
+
+    const status: AdapterStatus = {
+      adapterFile: resolvedAdapterFilePath,
+      configured: true,
+      profileId: config.profileId,
+      tool: config.tool,
+      syncMode: config.syncMode,
+      health: "healthy",
+      warnings,
+      errors,
+      checkedAt
+    };
+
+    if (config.syncMode === "file-sync") {
+      const inboundPath = this.resolveConfiguredPath(resolvedAdapterFilePath, config.inboundSnapshotFile);
+      const outboundPath = this.resolveConfiguredPath(
+        resolvedAdapterFilePath,
+        config.outboundSnapshotFile
+      );
+
+      if (!inboundPath) {
+        errors.push("inboundSnapshotFile is missing.");
+      }
+
+      if (!outboundPath) {
+        errors.push("outboundSnapshotFile is missing.");
+      }
+
+      const inboundStatus = this.inspectSnapshotFile(inboundPath);
+      const outboundStatus = this.inspectSnapshotFile(outboundPath);
+
+      if (!inboundStatus.exists) {
+        warnings.push("Inbound snapshot file is missing.");
+      } else if (!inboundStatus.valid) {
+        errors.push(`Inbound snapshot is invalid: ${inboundStatus.error ?? "unknown error"}`);
+      }
+
+      if (!outboundStatus.exists) {
+        warnings.push("Outbound snapshot file is missing.");
+      } else if (!outboundStatus.valid) {
+        errors.push(`Outbound snapshot is invalid: ${outboundStatus.error ?? "unknown error"}`);
+      }
+
+      const quarantineDir = inboundPath
+        ? path.join(path.dirname(inboundPath), ".pluro-invalid")
+        : path.join(path.dirname(resolvedAdapterFilePath), ".pluro-invalid");
+      const quarantinedFilesCount = this.countDirectoryEntries(quarantineDir);
+
+      if (quarantinedFilesCount > 0) {
+        warnings.push(
+          `Detected ${quarantinedFilesCount} quarantined inbound snapshot file(s).`
+        );
+      }
+
+      status.fileSync = {
+        inbound: inboundStatus,
+        outbound: outboundStatus,
+        quarantineDir,
+        quarantinedFilesCount
+      };
+    }
+
+    if (config.syncMode === "mcp") {
+      const command = config.mcpCommand;
+      const commandPath = command ? this.resolveCommandPath(command) : undefined;
+
+      if (!command) {
+        errors.push("mcpCommand is missing.");
+      } else if (!commandPath) {
+        warnings.push(`MCP command '${command}' was not found on PATH.`);
+      }
+
+      status.mcp = {
+        command,
+        args: config.mcpArgs ?? [],
+        commandFound: Boolean(commandPath),
+        commandPath
+      };
+    }
+
+    if (errors.length > 0) {
+      status.health = "error";
+    } else if (warnings.length > 0) {
+      status.health = "warning";
+    }
+
+    return status;
+  }
+
+  private inspectSnapshotFile(filePath: string | undefined): SnapshotFileStatus {
+    if (!filePath) {
+      return {
+        path: "",
+        exists: false,
+        valid: false,
+        entries: 0,
+        error: "Path not configured"
+      };
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return {
+        path: filePath,
+        exists: false,
+        valid: false,
+        entries: 0
+      };
+    }
+
+    const stats = fs.statSync(filePath);
+
+    try {
+      const snapshot = this.readSnapshot(filePath);
+
+      return {
+        path: filePath,
+        exists: true,
+        valid: true,
+        entries: snapshot.entries.length,
+        exportedAt: snapshot.exportedAt,
+        lastModifiedAt: stats.mtime.toISOString()
+      };
+    } catch (error) {
+      return {
+        path: filePath,
+        exists: true,
+        valid: false,
+        entries: 0,
+        lastModifiedAt: stats.mtime.toISOString(),
+        error: this.getErrorMessage(error)
+      };
+    }
+  }
+
+  private resolveConfiguredPath(
+    adapterFilePath: string,
+    configuredPath: string | undefined
+  ): string | undefined {
+    if (!configuredPath) {
+      return undefined;
+    }
+
+    return this.resolveAdapterFilePath(adapterFilePath, configuredPath);
+  }
+
+  private countDirectoryEntries(dirPath: string): number {
+    if (!fs.existsSync(dirPath)) {
+      return 0;
+    }
+
+    try {
+      return fs.readdirSync(dirPath).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  private resolveCommandPath(command: string): string | undefined {
+    if (!command.trim()) {
+      return undefined;
+    }
+
+    if (path.isAbsolute(command)) {
+      return fs.existsSync(command) ? command : undefined;
+    }
+
+    if (command.includes("/") || command.includes("\\")) {
+      const candidate = path.resolve(command);
+      return fs.existsSync(candidate) ? candidate : undefined;
+    }
+
+    const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+    const extensions =
+      process.platform === "win32" ? ["", ".exe", ".cmd", ".bat", ".ps1"] : [""];
+
+    for (const pathEntry of pathEntries) {
+      for (const extension of extensions) {
+        const candidate = path.join(pathEntry, `${command}${extension}`);
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }

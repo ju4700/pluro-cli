@@ -73,3 +73,41 @@ test("mcp profile template exposes mcp command metadata", () => {
     assert.deepEqual(config.mcpArgs, ["daemon", "mcp"]);
   });
 });
+
+test("adapter status reports healthy for valid file-sync profile", () => {
+  withTempDir((tempDir) => {
+    const engine = new FileAdapterEngine(tempDir);
+    const result = engine.createProfileTemplate("cursor-file");
+
+    const status = engine.getAdapterStatus(result.adapterFile);
+
+    assert.equal(status.configured, true);
+    assert.equal(status.health, "healthy");
+    assert.equal(status.profileId, "cursor-file");
+    assert.equal(status.syncMode, "file-sync");
+    assert.ok(status.fileSync);
+    assert.equal(status.fileSync?.inbound.valid, true);
+    assert.equal(status.fileSync?.outbound.valid, true);
+  });
+});
+
+test("adapter status reports invalid inbound snapshot and quarantine count", () => {
+  withTempDir((tempDir) => {
+    const engine = new FileAdapterEngine(tempDir);
+    const result = engine.createProfileTemplate("cursor-file");
+    const config = engine.readAdapterConfig(result.adapterFile);
+    const inbound = config.inboundSnapshotFile as string;
+
+    fs.writeFileSync(inbound, "{\n  \"version\": 1,\n  \"broken\": ", "utf8");
+
+    const quarantineDir = path.join(path.dirname(inbound), ".pluro-invalid");
+    fs.mkdirSync(quarantineDir, { recursive: true });
+    fs.writeFileSync(path.join(quarantineDir, "bad.snapshot.json"), "{}\n", "utf8");
+
+    const status = engine.getAdapterStatus(result.adapterFile);
+
+    assert.equal(status.health, "error");
+    assert.ok(status.errors.some((item) => item.includes("Inbound snapshot is invalid")));
+    assert.equal(status.fileSync?.quarantinedFilesCount, 1);
+  });
+});

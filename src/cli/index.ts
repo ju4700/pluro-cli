@@ -83,6 +83,20 @@ interface ConnectorBootstrapCliOptions {
   syncMode: string;
 }
 
+interface ConnectorStatusCliOptions {
+  focus: string;
+  syncMode?: string;
+  outputDir?: string;
+}
+
+interface ConnectorStatusTarget {
+  adapterFile: string;
+  expectedProfileId?: string;
+  expectedProfileName?: string;
+  expectedTool?: string;
+  expectedSyncMode?: AdapterSyncMode;
+}
+
 interface ConnectorSyncCliOptions {
   direction: string;
 }
@@ -189,6 +203,16 @@ function parseAdapterSyncMode(value: string): AdapterSyncMode {
   }
 
   throw new Error(`Invalid sync mode: ${value}. Expected file-sync or mcp.`);
+}
+
+function parseConnectorFocus(value: string): "all" | "primary" {
+  const focus = value.trim().toLowerCase();
+
+  if (focus === "all" || focus === "primary") {
+    return focus;
+  }
+
+  throw new Error(`Invalid focus: ${value}. Expected all or primary.`);
 }
 
 function getErrorMessage(error: unknown): string {
@@ -626,12 +650,8 @@ connectorCommand
   .option("--focus <focus>", "all or primary", "all")
   .option("--sync-mode <mode>", "Filter by sync mode: file-sync or mcp")
   .action((options: ConnectorListCliOptions) => {
-    const focus = String(options.focus).trim().toLowerCase();
+    const focus = parseConnectorFocus(String(options.focus));
     const syncMode = options.syncMode ? parseAdapterSyncMode(options.syncMode) : undefined;
-
-    if (focus !== "all" && focus !== "primary") {
-      throw new Error(`Invalid focus: ${options.focus}. Expected all or primary.`);
-    }
 
     const profiles =
       focus === "primary"
@@ -646,6 +666,77 @@ connectorCommand
       profiles
     });
   });
+
+connectorCommand
+  .command("status")
+  .description("Show adapter health and sync readiness at a glance")
+  .argument("[adapterFiles...]", "Optional adapter config files to inspect")
+  .option("--focus <focus>", "all or primary (used when no adapter files are passed)", "primary")
+  .option("--sync-mode <mode>", "Filter discovered profiles by sync mode: file-sync or mcp")
+  .option("--output-dir <path>", "Base directory for profile discovery")
+  .action(
+    (
+      adapterFiles: string[] | undefined,
+      options: ConnectorStatusCliOptions,
+      command: Command
+    ) => {
+      const focus = parseConnectorFocus(String(options.focus));
+      const syncMode = options.syncMode ? parseAdapterSyncMode(options.syncMode) : undefined;
+      const requestedFiles = Array.isArray(adapterFiles)
+        ? adapterFiles
+        : adapterFiles
+          ? [adapterFiles]
+          : [];
+
+      const globals = getGlobalOptions(command);
+      const paths = resolvePaths({ dataDir: globals.dataDir, dbPath: globals.dbPath });
+      const outputDir = options.outputDir ? path.resolve(options.outputDir) : paths.dataDir;
+      const engine = new FileAdapterEngine(outputDir);
+
+      const targets: ConnectorStatusTarget[] =
+        requestedFiles.length > 0
+          ? requestedFiles.map((filePath) => ({
+              adapterFile: path.resolve(filePath)
+            }))
+          : (focus === "primary"
+              ? listPrimaryIdeProfiles(syncMode)
+              : BUILTIN_ADAPTER_PROFILES.filter(
+                  (profile) => !syncMode || profile.syncMode === syncMode
+                )
+            ).map((profile) => ({
+              adapterFile: path.join(outputDir, profile.suggestedPath, "pluro.adapter.json"),
+              expectedProfileId: profile.id,
+              expectedProfileName: profile.name,
+              expectedTool: profile.tool,
+              expectedSyncMode: profile.syncMode
+            }));
+
+      const statuses = targets.map((target) => ({
+        expectedProfileId: target.expectedProfileId,
+        expectedProfileName: target.expectedProfileName,
+        expectedTool: target.expectedTool,
+        expectedSyncMode: target.expectedSyncMode,
+        ...engine.getAdapterStatus(target.adapterFile)
+      }));
+
+      const summary = {
+        total: statuses.length,
+        healthy: statuses.filter((status) => status.health === "healthy").length,
+        warning: statuses.filter((status) => status.health === "warning").length,
+        error: statuses.filter((status) => status.health === "error").length
+      };
+
+      printJson({
+        ok: true,
+        focus: requestedFiles.length > 0 ? "custom" : focus,
+        syncMode: syncMode ?? "all",
+        outputDir,
+        checkedAt: new Date().toISOString(),
+        summary,
+        statuses
+      });
+    }
+  );
 
 connectorCommand
   .command("bootstrap")

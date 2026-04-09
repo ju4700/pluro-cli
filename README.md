@@ -170,6 +170,18 @@ List only primary IDE MCP profiles:
 pluro connector list --focus primary --sync-mode mcp
 ```
 
+Check primary IDE adapter health at a glance:
+
+```bash
+pluro connector status --focus primary
+```
+
+Check one adapter file explicitly:
+
+```bash
+pluro connector status <path-to-adapter-json>
+```
+
 Run one-shot bidirectional sync:
 
 ```bash
@@ -211,7 +223,7 @@ Environment variable alternative:
 - `context add|get|list|update|delete`
 - `snapshot export|import`
 - `history`
-- `connector list|bootstrap|init|sync|watch`
+- `connector list|status|bootstrap|init|sync|watch`
 - `daemon run|status|mcp`
 
 ## Verification
