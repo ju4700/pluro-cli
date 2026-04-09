@@ -172,6 +172,10 @@ Watch mode listens for:
 - `--passphrase <value>`: fallback encryption key material
 - `--disable-keychain`: skip OS keychain lookup
 
+Environment variable alternative:
+
+- `PLURO_DISABLE_KEYCHAIN=1` disables keychain lookups in headless/CI environments.
+
 ## Commands
 
 - `context add|get|list|update|delete`
@@ -206,5 +210,6 @@ Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - Encryption key resolution order: OS keychain first, then passphrase.
 - For environments where keychain is not available, set `PLURO_PASSPHRASE` or pass `--passphrase`.
+- In CI/headless Linux, set `PLURO_DISABLE_KEYCHAIN=1` to avoid keychain provider issues.
 - File-sync adapters include inbound and outbound snapshot files plus profile notes.
 - MCP mode is exposed over stdio so it can be registered in MCP-capable clients.

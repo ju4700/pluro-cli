@@ -1,5 +1,35 @@
 import * as crypto from "node:crypto";
-import keytar from "keytar";
+
+interface KeytarLike {
+  getPassword(service: string, account: string): Promise<string | null>;
+  setPassword(service: string, account: string, password: string): Promise<void>;
+}
+
+let keytarModulePromise: Promise<KeytarLike | null> | null = null;
+
+async function resolveKeytarModule(): Promise<KeytarLike | null> {
+  if (!keytarModulePromise) {
+    keytarModulePromise = (async () => {
+      try {
+        const moduleValue = await import("keytar");
+        const candidate = (moduleValue as { default?: unknown }).default ?? moduleValue;
+
+        if (
+          typeof (candidate as KeytarLike).getPassword === "function" &&
+          typeof (candidate as KeytarLike).setPassword === "function"
+        ) {
+          return candidate as KeytarLike;
+        }
+
+        return null;
+      } catch {
+        return null;
+      }
+    })();
+  }
+
+  return keytarModulePromise;
+}
 
 export interface EncryptionPayload {
   ciphertext: string;
@@ -77,7 +107,12 @@ export class EncryptionService {
   }
 
   private async loadFromKeychain(): Promise<Buffer | null> {
-    if (this.options.disableKeychain) {
+    if (this.isKeychainDisabled()) {
+      return null;
+    }
+
+    const keytar = await resolveKeytarModule();
+    if (!keytar) {
       return null;
     }
 
@@ -100,5 +135,19 @@ export class EncryptionService {
     } catch {
       return null;
     }
+  }
+
+  private isKeychainDisabled(): boolean {
+    if (this.options.disableKeychain) {
+      return true;
+    }
+
+    const envValue = process.env.PLURO_DISABLE_KEYCHAIN;
+    if (!envValue) {
+      return false;
+    }
+
+    const normalized = envValue.trim().toLowerCase();
+    return normalized === "1" || normalized === "true";
   }
 }

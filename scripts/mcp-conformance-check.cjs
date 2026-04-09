@@ -191,9 +191,13 @@ async function run() {
   const cliPath = ensureBuildOutput();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pluro-mcp-conformance-"));
 
-  const proc = spawn(process.execPath, [cliPath, "--data-dir", dataDir, "daemon", "mcp"], {
-    stdio: ["pipe", "pipe", "pipe"]
-  });
+  const proc = spawn(
+    process.execPath,
+    [cliPath, "--data-dir", dataDir, "--disable-keychain", "daemon", "mcp"],
+    {
+      stdio: ["pipe", "pipe", "pipe"]
+    }
+  );
 
   const rpc = createRpcClient(proc);
 
