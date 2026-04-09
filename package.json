@@ -13,7 +13,9 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test",
     "verify:mcp": "npm run build && node scripts/mcp-conformance-check.cjs",
-    "verify:ci": "npm run typecheck && npm test && npm run verify:mcp"
+    "verify:ci": "npm run typecheck && npm test && npm run verify:mcp",
+    "verify:release-tag": "node scripts/verify-release-tag.cjs",
+    "release:check": "npm run verify:ci && npm run verify:release-tag"
   },
   "keywords": [
     "cli",

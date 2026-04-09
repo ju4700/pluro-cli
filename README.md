@@ -1,5 +1,9 @@
 # pluro-cli
 
+[![CI](https://github.com/ju4700/pluro-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ju4700/pluro-cli/actions/workflows/ci.yml)
+[![Release](https://github.com/ju4700/pluro-cli/actions/workflows/release.yml/badge.svg)](https://github.com/ju4700/pluro-cli/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Pluro is a local-first context bridge CLI that lets multiple LLM tools and agentic IDEs share structured context on one machine.
 
 ## Current Status
@@ -181,8 +185,14 @@ Watch mode listens for:
 - `npm test`: build + unit/integration tests
 - `npm run verify:mcp`: standalone MCP handshake and tool-call conformance smoke check
 - `npm run verify:ci`: CI-equivalent local gate (`typecheck`, `test`, `verify:mcp`)
+- `npm run verify:release-tag -- vX.Y.Z`: ensure pushed release tag matches package version
 
 GitHub Actions runs the CI gate on push and pull request via [.github/workflows/ci.yml](.github/workflows/ci.yml).
+Releases run from tags via [.github/workflows/release.yml](.github/workflows/release.yml).
+
+## Contributing
+
+Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Architecture
 
