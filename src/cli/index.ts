@@ -122,7 +122,7 @@ interface ConnectorStatusRow {
   issues?: string[];
 }
 
-type StatusOutputFormat = "json" | "table";
+type StatusOutputFormat = "json" | "table" | "summary";
 
 interface ConnectorStatusTablePayload {
   focus: string;
@@ -267,11 +267,23 @@ function parseConnectorFocus(value: string): "all" | "primary" {
 function parseStatusOutputFormat(value: string): StatusOutputFormat {
   const normalized = value.trim().toLowerCase();
 
-  if (normalized === "json" || normalized === "table") {
+  if (normalized === "json" || normalized === "table" || normalized === "summary") {
     return normalized;
   }
 
-  throw new Error(`Invalid format: ${value}. Expected json or table.`);
+  throw new Error(`Invalid format: ${value}. Expected json, table, or summary.`);
+}
+
+function toOverallHealth(summary: ConnectorStatusSummary): "healthy" | "warning" | "error" {
+  if (summary.error > 0) {
+    return "error";
+  }
+
+  if (summary.warning > 0) {
+    return "warning";
+  }
+
+  return "healthy";
 }
 
 function formatDaemonHealthTable(url: string, payload: DaemonHealthTablePayload): string {
@@ -285,6 +297,29 @@ function formatDaemonHealthTable(url: string, payload: DaemonHealthTablePayload)
     `Timestamp: ${timestamp}`,
     "Status: OK"
   ].join("\n");
+}
+
+function formatDaemonHealthSummary(url: string, payload: DaemonHealthTablePayload): string {
+  const service = payload.service ?? "unknown";
+  const timestamp = payload.timestamp ?? "unknown";
+
+  return `daemon_health status=ok service=${service} url=${url} timestamp=${timestamp}`;
+}
+
+function formatConnectorStatusSummary(payload: ConnectorStatusTablePayload): string {
+  const overall = toOverallHealth(payload.summary);
+
+  return [
+    "connector_status",
+    `focus=${payload.focus}`,
+    `sync=${payload.syncMode}`,
+    `total=${payload.summary.total}`,
+    `healthy=${payload.summary.healthy}`,
+    `warning=${payload.summary.warning}`,
+    `error=${payload.summary.error}`,
+    `overall=${overall}`,
+    `checkedAt=${payload.checkedAt}`
+  ].join(" ");
 }
 
 function truncateCell(value: string, width: number): string {
@@ -859,7 +894,7 @@ connectorCommand
   .option("--focus <focus>", "all or primary (used when no adapter files are passed)", "primary")
   .option("--sync-mode <mode>", "Filter discovered profiles by sync mode: file-sync or mcp")
   .option("--output-dir <path>", "Base directory for profile discovery")
-  .option("--format <format>", "json or table", "json")
+  .option("--format <format>", "json, table, or summary", "json")
   .action(
     (
       adapterFiles: string[] | undefined,
@@ -923,16 +958,21 @@ connectorCommand
         statuses
       };
 
+      const statusPayload: ConnectorStatusTablePayload = {
+        focus: responsePayload.focus,
+        syncMode: responsePayload.syncMode,
+        checkedAt: responsePayload.checkedAt,
+        summary: responsePayload.summary,
+        statuses: responsePayload.statuses
+      };
+
+      if (outputFormat === "summary") {
+        printText(formatConnectorStatusSummary(statusPayload));
+        return;
+      }
+
       if (outputFormat === "table") {
-        printText(
-          formatConnectorStatusTable({
-            focus: responsePayload.focus,
-            syncMode: responsePayload.syncMode,
-            checkedAt: responsePayload.checkedAt,
-            summary: responsePayload.summary,
-            statuses: responsePayload.statuses
-          })
-        );
+        printText(formatConnectorStatusTable(statusPayload));
         return;
       }
 
@@ -1224,7 +1264,7 @@ daemonCommand
   .option("--focus <focus>", "all or primary for connector status", "primary")
   .option("--sync-mode <mode>", "Filter connector status by sync mode: file-sync or mcp")
   .option("--compact", "Compact connector status output", false)
-  .option("--format <format>", "json or table", "json")
+  .option("--format <format>", "json, table, or summary", "json")
   .action(async (options: DaemonStatusCliOptions) => {
     const host = options.host;
     const port = parseIntValue(String(options.port), DEFAULT_DAEMON_PORT);
@@ -1260,23 +1300,28 @@ daemonCommand
       const payload = (await response.json()) as unknown;
 
       if (options.connectors) {
-        if (outputFormat === "table") {
-          const connectorPayload = payload as {
-            checkedAt?: string;
-            syncMode?: string;
-            summary: ConnectorStatusSummary;
-            statuses: ConnectorStatusRow[];
-          };
+        const connectorPayload = payload as {
+          checkedAt?: string;
+          syncMode?: string;
+          summary: ConnectorStatusSummary;
+          statuses: ConnectorStatusRow[];
+        };
 
-          printText(
-            formatConnectorStatusTable({
-              focus,
-              syncMode: connectorPayload.syncMode ?? (options.syncMode ?? "all"),
-              checkedAt: connectorPayload.checkedAt ?? new Date().toISOString(),
-              summary: connectorPayload.summary,
-              statuses: connectorPayload.statuses
-            })
-          );
+        const statusPayload: ConnectorStatusTablePayload = {
+          focus,
+          syncMode: connectorPayload.syncMode ?? (options.syncMode ?? "all"),
+          checkedAt: connectorPayload.checkedAt ?? new Date().toISOString(),
+          summary: connectorPayload.summary,
+          statuses: connectorPayload.statuses
+        };
+
+        if (outputFormat === "summary") {
+          printText(formatConnectorStatusSummary(statusPayload));
+          return;
+        }
+
+        if (outputFormat === "table") {
+          printText(formatConnectorStatusTable(statusPayload));
           return;
         }
 
@@ -1284,8 +1329,14 @@ daemonCommand
         return;
       }
 
+      const healthPayload = payload as DaemonHealthTablePayload;
+
+      if (outputFormat === "summary") {
+        printText(formatDaemonHealthSummary(url, healthPayload));
+        return;
+      }
+
       if (outputFormat === "table") {
-        const healthPayload = payload as DaemonHealthTablePayload;
         printText(formatDaemonHealthTable(url, healthPayload));
         return;
       }

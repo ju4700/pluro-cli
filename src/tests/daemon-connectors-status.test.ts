@@ -223,3 +223,101 @@ test("daemon status command supports connector table output", async () => {
     }
   });
 });
+
+test("daemon status command supports connector summary output", async () => {
+  await withTempDir(async (dataDir) => {
+    const engine = new FileAdapterEngine(dataDir);
+    engine.createProfileTemplate("cursor-file");
+    engine.createProfileTemplate("vscode-copilot-file");
+    engine.createProfileTemplate("antigravity-file");
+
+    const store = new SqliteStore(path.join(dataDir, "context.db"));
+    const service = new ContextService(
+      store,
+      new EncryptionService({ passphrase: "daemon-test", disableKeychain: true })
+    );
+
+    service.init();
+
+    const server = await startDaemonServer(service, {
+      host: "127.0.0.1",
+      port: 0,
+      dataDir
+    });
+
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const port = (address as AddressInfo).port;
+
+      const result = await runCli([
+        "daemon",
+        "status",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        "--connectors",
+        "--focus",
+        "primary",
+        "--sync-mode",
+        "file-sync",
+        "--format",
+        "summary"
+      ]);
+
+      assert.equal(result.code, 0, result.stderr);
+      assert.ok(result.stdout.includes("connector_status"));
+      assert.ok(result.stdout.includes("focus=primary"));
+      assert.ok(result.stdout.includes("sync=file-sync"));
+      assert.ok(result.stdout.includes("total=3"));
+      assert.ok(result.stdout.includes("overall=healthy"));
+    } finally {
+      await closeServer(server);
+      service.close();
+    }
+  });
+});
+
+test("daemon status command supports daemon health summary output", async () => {
+  await withTempDir(async (dataDir) => {
+    const store = new SqliteStore(path.join(dataDir, "context.db"));
+    const service = new ContextService(
+      store,
+      new EncryptionService({ passphrase: "daemon-test", disableKeychain: true })
+    );
+
+    service.init();
+
+    const server = await startDaemonServer(service, {
+      host: "127.0.0.1",
+      port: 0,
+      dataDir
+    });
+
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const port = (address as AddressInfo).port;
+
+      const result = await runCli([
+        "daemon",
+        "status",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        "--format",
+        "summary"
+      ]);
+
+      assert.equal(result.code, 0, result.stderr);
+      assert.ok(result.stdout.includes("daemon_health"));
+      assert.ok(result.stdout.includes("status=ok"));
+      assert.ok(result.stdout.includes("service=pluro-daemon"));
+    } finally {
+      await closeServer(server);
+      service.close();
+    }
+  });
+});

@@ -94,6 +94,12 @@ Show daemon connector health in a terminal-friendly table:
 pluro daemon status --port 43111 --connectors --focus primary --format table
 ```
 
+Emit daemon connector health as a one-line summary for scripts:
+
+```bash
+pluro daemon status --port 43111 --connectors --focus primary --format summary
+```
+
 Run MCP stdio server:
 
 ```bash
@@ -194,6 +200,12 @@ Render adapter health as a table:
 pluro connector status --focus primary --format table
 ```
 
+Emit adapter health as a one-line summary:
+
+```bash
+pluro connector status --focus primary --format summary
+```
+
 Check one adapter file explicitly:
 
 ```bash
@@ -253,6 +265,7 @@ Status command output formats:
 
 - `--format json` (default)
 - `--format table` for a compact terminal-friendly view
+- `--format summary` for machine-friendly one-line scripting output
 
 ## Verification
 

@@ -115,3 +115,32 @@ test("connector status supports table output format", () => {
     assert.ok(result.stdout.includes("Summary:"));
   });
 });
+
+test("connector status supports summary output format", () => {
+  withTempDir((dataDir) => {
+    const engine = new FileAdapterEngine(dataDir);
+    engine.createProfileTemplate("cursor-file");
+    engine.createProfileTemplate("vscode-copilot-file");
+    engine.createProfileTemplate("antigravity-file");
+
+    const result = runCli([
+      "--data-dir",
+      dataDir,
+      "connector",
+      "status",
+      "--focus",
+      "primary",
+      "--sync-mode",
+      "file-sync",
+      "--format",
+      "summary"
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.ok(result.stdout.includes("connector_status"));
+    assert.ok(result.stdout.includes("focus=primary"));
+    assert.ok(result.stdout.includes("sync=file-sync"));
+    assert.ok(result.stdout.includes("total=3"));
+    assert.ok(result.stdout.includes("overall=healthy"));
+  });
+});
