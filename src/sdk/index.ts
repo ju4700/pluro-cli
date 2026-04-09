@@ -4,10 +4,12 @@ import { ContextService } from "../core/context-service";
 import { EncryptionService } from "../core/security/encryption";
 import { SqliteStore } from "../core/storage/sqlite";
 import type {
+  ContextListPage,
   ContextEntry,
   ContextSnapshot,
   CreateContextInput,
   SearchContextFilters,
+  SnapshotExportOptions,
   SnapshotImportResult,
   UpdateContextInput
 } from "../core/types";
@@ -60,6 +62,10 @@ export class PluroClient {
     return this.service.listContexts(filters);
   }
 
+  async listContextsPage(filters: SearchContextFilters = {}): Promise<ContextListPage> {
+    return this.service.listContextsPage(filters);
+  }
+
   async deleteContext(id: string): Promise<boolean> {
     return this.service.deleteContext(id);
   }
@@ -68,8 +74,8 @@ export class PluroClient {
     return this.service.listHistory(entryId, limit);
   }
 
-  async exportSnapshot(): Promise<ContextSnapshot> {
-    return this.service.exportSnapshot();
+  async exportSnapshot(options: SnapshotExportOptions = {}): Promise<ContextSnapshot> {
+    return this.service.exportSnapshot(options);
   }
 
   async importSnapshot(

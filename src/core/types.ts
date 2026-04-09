@@ -66,6 +66,18 @@ export interface SearchContextFilters {
   scope?: string;
   tag?: string;
   limit?: number;
+  cursor?: string;
+}
+
+export interface ContextListPage {
+  entries: ContextEntry[];
+  nextCursor?: string;
+}
+
+export interface SnapshotExportOptions {
+  limit?: number;
+  cursor?: string;
+  historyLimit?: number;
 }
 
 export const snapshotEntrySchema = z.object({
@@ -94,7 +106,8 @@ export const contextSnapshotSchema = z.object({
   version: z.literal(1),
   exportedAt: z.string().datetime(),
   entries: z.array(snapshotEntrySchema),
-  history: z.array(snapshotHistorySchema).default([])
+  history: z.array(snapshotHistorySchema).default([]),
+  nextCursor: z.string().optional()
 });
 
 export type ContextSnapshot = z.infer<typeof contextSnapshotSchema>;

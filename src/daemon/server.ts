@@ -48,6 +48,19 @@ function getEntryId(pathname: string): string | null {
   return id.length > 0 ? id : null;
 }
 
+function parseOptionalInt(value: string | null): number | undefined {
+  if (value === null) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
 export async function startDaemonServer(
   service: ContextService,
   options: DaemonServerOptions = {}
@@ -76,17 +89,17 @@ export async function startDaemonServer(
       }
 
       if (pathname === "/context" && method === "GET") {
-        const limitRaw = url.searchParams.get("limit");
         const filters: SearchContextFilters = {
           query: url.searchParams.get("query") ?? undefined,
           sourceTool: url.searchParams.get("source") ?? undefined,
           scope: url.searchParams.get("scope") ?? undefined,
           tag: url.searchParams.get("tag") ?? undefined,
-          limit: limitRaw ? Number.parseInt(limitRaw, 10) : undefined
+          limit: parseOptionalInt(url.searchParams.get("limit")),
+          cursor: url.searchParams.get("cursor") ?? undefined
         };
 
-        const entries = await service.listContexts(filters);
-        sendJson(res, 200, { ok: true, entries });
+        const page = await service.listContextsPage(filters);
+        sendJson(res, 200, { ok: true, entries: page.entries, nextCursor: page.nextCursor });
         return;
       }
 
@@ -116,7 +129,12 @@ export async function startDaemonServer(
       }
 
       if (pathname === "/snapshot/export" && method === "GET") {
-        const snapshot = await service.exportSnapshot();
+        const snapshot = await service.exportSnapshot({
+          limit: parseOptionalInt(url.searchParams.get("limit")),
+          cursor: url.searchParams.get("cursor") ?? undefined,
+          historyLimit: parseOptionalInt(url.searchParams.get("historyLimit"))
+        });
+
         sendJson(res, 200, { ok: true, snapshot });
         return;
       }

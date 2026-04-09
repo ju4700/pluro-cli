@@ -37,6 +37,8 @@ interface ContextListCliOptions {
   scope?: string;
   tag?: string;
   limit: string;
+  cursor?: string;
+  paged?: boolean;
 }
 
 interface ContextUpdateCliOptions {
@@ -51,6 +53,12 @@ interface ContextUpdateCliOptions {
 
 interface SnapshotImportCliOptions {
   policy: string;
+}
+
+interface SnapshotExportCliOptions {
+  limit?: string;
+  cursor?: string;
+  historyLimit: string;
 }
 
 interface HistoryCliOptions {
@@ -89,6 +97,19 @@ function parseIntValue(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   if (Number.isNaN(parsed)) {
     return fallback;
+  }
+
+  return parsed;
+}
+
+function parseOptionalIntValue(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return undefined;
   }
 
   return parsed;
@@ -283,6 +304,8 @@ contextCommand
   .option("--scope <scope>", "Filter by scope")
   .option("--tag <tag>", "Filter by tag")
   .option("--limit <number>", "Maximum number of records", "50")
+  .option("--cursor <cursor>", "Pagination cursor token")
+  .option("--paged", "Return entries with nextCursor token", false)
   .action(async (query: string | undefined, options: ContextListCliOptions, command: Command) => {
     await withService(command, async (service) => {
       const filters: SearchContextFilters = {
@@ -290,11 +313,18 @@ contextCommand
         sourceTool: options.source,
         scope: options.scope,
         tag: options.tag,
-        limit: parseIntValue(String(options.limit), 50)
+        limit: parseIntValue(String(options.limit), 50),
+        cursor: options.cursor
       };
 
-      const entries = await service.listContexts(filters);
-      printJson(entries);
+      const page = await service.listContextsPage(filters);
+
+      if (options.paged || options.cursor) {
+        printJson(page);
+        return;
+      }
+
+      printJson(page.entries);
     });
   });
 
@@ -378,9 +408,17 @@ snapshotCommand
   .command("export")
   .description("Export all context to a snapshot file")
   .argument("<file>", "Output file path")
-  .action(async (file: string, _options: unknown, command: Command) => {
+  .option("--limit <number>", "Maximum entries in paged export")
+  .option("--cursor <cursor>", "Pagination cursor token")
+  .option("--history-limit <number>", "Maximum history rows to include", "5000")
+  .action(async (file: string, options: SnapshotExportCliOptions, command: Command) => {
     await withService(command, async (service) => {
-      const snapshot = await service.exportSnapshot();
+      const snapshot = await service.exportSnapshot({
+        limit: parseOptionalIntValue(options.limit),
+        cursor: options.cursor,
+        historyLimit: parseIntValue(String(options.historyLimit), 5000)
+      });
+
       const filePath = path.resolve(file);
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
@@ -389,7 +427,8 @@ snapshotCommand
         ok: true,
         file: filePath,
         entries: snapshot.entries.length,
-        exportedAt: snapshot.exportedAt
+        exportedAt: snapshot.exportedAt,
+        nextCursor: snapshot.nextCursor
       });
     });
   });

@@ -25,7 +25,14 @@ const listContextArgsSchema = z.object({
   sourceTool: z.string().optional(),
   scope: z.string().optional(),
   tag: z.string().optional(),
-  limit: z.number().int().min(1).max(500).optional()
+  limit: z.number().int().min(1).max(500).optional(),
+  cursor: z.string().optional()
+});
+
+const snapshotExportArgsSchema = z.object({
+  limit: z.number().int().min(1).max(5000).optional(),
+  cursor: z.string().optional(),
+  historyLimit: z.number().int().min(1).max(5000).optional()
 });
 
 const getContextArgsSchema = z.object({
@@ -114,7 +121,8 @@ const TOOL_DEFINITIONS: Tool[] = [
         sourceTool: { type: "string" },
         scope: { type: "string" },
         tag: { type: "string" },
-        limit: { type: "number" }
+        limit: { type: "number" },
+        cursor: { type: "string" }
       }
     }
   },
@@ -142,10 +150,14 @@ const TOOL_DEFINITIONS: Tool[] = [
   },
   {
     name: "pluro_snapshot_export",
-    description: "Export all context entries as a structured snapshot payload.",
+    description: "Export context entries as a structured snapshot payload.",
     inputSchema: {
       type: "object",
-      properties: {}
+      properties: {
+        limit: { type: "number" },
+        cursor: { type: "string" },
+        historyLimit: { type: "number" }
+      }
     }
   },
   {
@@ -209,8 +221,8 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
 
       if (toolName === "pluro_context_list") {
         const payload = listContextArgsSchema.parse(args);
-        const entries = await service.listContexts(payload);
-        return toToolResult({ entries, count: entries.length });
+        const page = await service.listContextsPage(payload);
+        return toToolResult({ entries: page.entries, count: page.entries.length, nextCursor: page.nextCursor });
       }
 
       if (toolName === "pluro_context_get") {
@@ -226,7 +238,8 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
       }
 
       if (toolName === "pluro_snapshot_export") {
-        const snapshot = await service.exportSnapshot();
+        const payload = snapshotExportArgsSchema.parse(args);
+        const snapshot = await service.exportSnapshot(payload);
         return toToolResult({ snapshot });
       }
 

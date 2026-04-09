@@ -4,6 +4,11 @@ import * as path from "node:path";
 
 import type { HistoryEntry, PersistedContextEntry, SearchContextFilters } from "../types";
 
+export interface ContextPageCursor {
+  updatedAt: string;
+  id: string;
+}
+
 interface SqliteContextRow {
   id: string;
   content: string;
@@ -74,6 +79,11 @@ export class SqliteStore {
     this.db.close();
   }
 
+  runInTransaction<T>(operation: () => T): T {
+    const transaction = this.db.transaction(operation);
+    return transaction();
+  }
+
   upsertContext(entry: PersistedContextEntry): void {
     const statement = this.db.prepare(`
       INSERT INTO context_entries (
@@ -136,30 +146,40 @@ export class SqliteStore {
   }
 
   listContexts(filters: SearchContextFilters = {}): PersistedContextEntry[] {
+    const rows = this.listContextsPage(
+      {
+        query: filters.query,
+        sourceTool: filters.sourceTool,
+        scope: filters.scope,
+        tag: filters.tag,
+        limit: filters.limit
+      },
+      undefined,
+      500
+    );
+
+    return rows;
+  }
+
+  listContextsPage(
+    filters: Omit<SearchContextFilters, "cursor"> = {},
+    cursor?: ContextPageCursor,
+    maxLimit = 500
+  ): PersistedContextEntry[] {
     const clauses: string[] = [];
     const params: Record<string, unknown> = {};
 
-    if (filters.query) {
-      clauses.push("(content LIKE @query OR source_tool LIKE @query OR tags_json LIKE @query)");
-      params.query = `%${filters.query}%`;
+    this.applyContextFilters(filters, clauses, params);
+
+    if (cursor) {
+      clauses.push(
+        "(updated_at < @cursorUpdatedAt OR (updated_at = @cursorUpdatedAt AND id < @cursorId))"
+      );
+      params.cursorUpdatedAt = cursor.updatedAt;
+      params.cursorId = cursor.id;
     }
 
-    if (filters.sourceTool) {
-      clauses.push("source_tool = @sourceTool");
-      params.sourceTool = filters.sourceTool;
-    }
-
-    if (filters.scope) {
-      clauses.push("scope = @scope");
-      params.scope = filters.scope;
-    }
-
-    if (filters.tag) {
-      clauses.push("tags_json LIKE @tagLike");
-      params.tagLike = `%\"${filters.tag}\"%`;
-    }
-
-    const boundedLimit = Math.max(1, Math.min(filters.limit ?? 50, 500));
+    const boundedLimit = Math.max(1, Math.min(filters.limit ?? 50, maxLimit));
     params.limit = boundedLimit;
 
     let query = "SELECT * FROM context_entries";
@@ -167,7 +187,7 @@ export class SqliteStore {
       query += ` WHERE ${clauses.join(" AND ")}`;
     }
 
-    query += " ORDER BY updated_at DESC LIMIT @limit";
+    query += " ORDER BY updated_at DESC, id DESC LIMIT @limit";
 
     const statement = this.db.prepare(query);
     const rows = statement.all(params) as SqliteContextRow[];
@@ -175,7 +195,9 @@ export class SqliteStore {
   }
 
   listAllContexts(): PersistedContextEntry[] {
-    const statement = this.db.prepare("SELECT * FROM context_entries ORDER BY updated_at DESC");
+    const statement = this.db.prepare(
+      "SELECT * FROM context_entries ORDER BY updated_at DESC, id DESC"
+    );
     const rows = statement.all() as SqliteContextRow[];
     return rows.map((row) => this.fromContextRow(row));
   }
@@ -246,6 +268,32 @@ export class SqliteStore {
       created_at: entry.createdAt,
       updated_at: entry.updatedAt
     };
+  }
+
+  private applyContextFilters(
+    filters: Omit<SearchContextFilters, "limit" | "cursor">,
+    clauses: string[],
+    params: Record<string, unknown>
+  ): void {
+    if (filters.query) {
+      clauses.push("(content LIKE @query OR source_tool LIKE @query OR tags_json LIKE @query)");
+      params.query = `%${filters.query}%`;
+    }
+
+    if (filters.sourceTool) {
+      clauses.push("source_tool = @sourceTool");
+      params.sourceTool = filters.sourceTool;
+    }
+
+    if (filters.scope) {
+      clauses.push("scope = @scope");
+      params.scope = filters.scope;
+    }
+
+    if (filters.tag) {
+      clauses.push("tags_json LIKE @tagLike");
+      params.tagLike = `%\"${filters.tag}\"%`;
+    }
   }
 
   private fromContextRow(row: SqliteContextRow): PersistedContextEntry {
