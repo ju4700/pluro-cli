@@ -36,6 +36,32 @@ test("cursor profile template creates adapter and snapshot files", () => {
   });
 });
 
+test("vscode copilot profile template creates expected files", () => {
+  withTempDir((tempDir) => {
+    const engine = new FileAdapterEngine(tempDir);
+    const result = engine.createProfileTemplate("vscode-copilot-file");
+
+    assert.ok(fs.existsSync(result.adapterFile));
+
+    const config = engine.readAdapterConfig(result.adapterFile);
+    assert.equal(config.profileId, "vscode-copilot-file");
+    assert.equal(config.tool, "vscode-copilot");
+    assert.equal(config.syncMode, "file-sync");
+    assert.ok(fs.existsSync(config.inboundSnapshotFile as string));
+    assert.ok(fs.existsSync(config.outboundSnapshotFile as string));
+  });
+});
+
+test("profile aliases can bootstrap templates", () => {
+  withTempDir((tempDir) => {
+    const engine = new FileAdapterEngine(tempDir);
+    const result = engine.createProfileTemplate("copilot-file");
+
+    const config = engine.readAdapterConfig(result.adapterFile);
+    assert.equal(config.profileId, "vscode-copilot-file");
+  });
+});
+
 test("mcp profile template exposes mcp command metadata", () => {
   withTempDir((tempDir) => {
     const engine = new FileAdapterEngine(tempDir);

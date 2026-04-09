@@ -6,7 +6,11 @@ import * as path from "node:path";
 import { Command } from "commander";
 
 import { FileAdapterEngine, type SyncDirection } from "../adapters/file-sync";
-import { BUILTIN_ADAPTER_PROFILES } from "../adapters/profiles";
+import {
+  BUILTIN_ADAPTER_PROFILES,
+  listPrimaryIdeProfiles,
+  type AdapterSyncMode
+} from "../adapters/profiles";
 import type { ConflictPolicy } from "../core/conflict-resolution";
 import { ensureDataDirectory, resolvePaths, type PluroPaths } from "../core/config";
 import { ContextService } from "../core/context-service";
@@ -67,6 +71,16 @@ interface HistoryCliOptions {
 
 interface ConnectorInitCliOptions {
   outputDir?: string;
+}
+
+interface ConnectorListCliOptions {
+  focus: string;
+  syncMode?: string;
+}
+
+interface ConnectorBootstrapCliOptions {
+  outputDir?: string;
+  syncMode: string;
 }
 
 interface ConnectorSyncCliOptions {
@@ -147,6 +161,14 @@ function parseSyncDirection(value: string): SyncDirection {
   }
 
   throw new Error(`Invalid sync direction: ${value}`);
+}
+
+function parseAdapterSyncMode(value: string): AdapterSyncMode {
+  if (value === "file-sync" || value === "mcp") {
+    return value;
+  }
+
+  throw new Error(`Invalid sync mode: ${value}. Expected file-sync or mcp.`);
 }
 
 function includesImport(direction: SyncDirection): boolean {
@@ -471,8 +493,58 @@ const connectorCommand = program.command("connector").description("Manage tool a
 connectorCommand
   .command("list")
   .description("List available adapter profiles")
-  .action(() => {
-    printJson(BUILTIN_ADAPTER_PROFILES);
+  .option("--focus <focus>", "all or primary", "all")
+  .option("--sync-mode <mode>", "Filter by sync mode: file-sync or mcp")
+  .action((options: ConnectorListCliOptions) => {
+    const focus = String(options.focus).trim().toLowerCase();
+    const syncMode = options.syncMode ? parseAdapterSyncMode(options.syncMode) : undefined;
+
+    if (focus !== "all" && focus !== "primary") {
+      throw new Error(`Invalid focus: ${options.focus}. Expected all or primary.`);
+    }
+
+    const profiles =
+      focus === "primary"
+        ? listPrimaryIdeProfiles(syncMode)
+        : BUILTIN_ADAPTER_PROFILES.filter(
+            (profile) => !syncMode || profile.syncMode === syncMode
+          );
+
+    printJson({
+      focus,
+      syncMode: syncMode ?? "all",
+      profiles
+    });
+  });
+
+connectorCommand
+  .command("bootstrap")
+  .description(
+    "Initialize adapter templates for primary IDEs (Cursor, VS Code Copilot, Antigravity)"
+  )
+  .option("--output-dir <path>", "Directory for adapter config files")
+  .option("--sync-mode <mode>", "file-sync or mcp", "file-sync")
+  .action((options: ConnectorBootstrapCliOptions, command: Command) => {
+    const globals = getGlobalOptions(command);
+    const paths = resolvePaths({ dataDir: globals.dataDir, dbPath: globals.dbPath });
+    const outputDir = options.outputDir ? path.resolve(options.outputDir) : paths.dataDir;
+    const syncMode = parseAdapterSyncMode(options.syncMode);
+
+    const engine = new FileAdapterEngine(outputDir);
+    const profiles = listPrimaryIdeProfiles(syncMode);
+    const templates = profiles.map((profile) => ({
+      profileId: profile.id,
+      profileName: profile.name,
+      ...engine.createProfileTemplate(profile.id)
+    }));
+
+    printJson({
+      ok: true,
+      focus: "primary",
+      targetIdeProfiles: ["cursor", "vscode-copilot", "antigravity"],
+      syncMode,
+      templates
+    });
   });
 
 connectorCommand

@@ -5,6 +5,7 @@ export type AdapterConflictPolicy = "lww" | "keep-both";
 export type AdapterToolKind =
   | "generic"
   | "cursor"
+  | "vscode-copilot"
   | "antigravity"
   | "terminal"
   | "mcp";
@@ -19,8 +20,15 @@ export interface AdapterProfile {
   inboundFileName?: string;
   outboundFileName?: string;
   defaultConflictPolicy?: AdapterConflictPolicy;
+  aliases?: string[];
   notes: string[];
 }
+
+export const PRIMARY_IDE_TOOLS: ReadonlyArray<AdapterToolKind> = [
+  "cursor",
+  "vscode-copilot",
+  "antigravity"
+];
 
 export const BUILTIN_ADAPTER_PROFILES: AdapterProfile[] = [
   {
@@ -56,6 +64,23 @@ export const BUILTIN_ADAPTER_PROFILES: AdapterProfile[] = [
     ]
   },
   {
+    id: "vscode-copilot-file",
+    name: "VS Code Copilot File Adapter",
+    description: "Use a shared file contract for VS Code tasks and Copilot-related automation.",
+    tool: "vscode-copilot",
+    syncMode: "file-sync",
+    suggestedPath: "context/vscode-copilot",
+    inboundFileName: "vscode-copilot-to-pluro.snapshot.json",
+    outboundFileName: "pluro-to-vscode-copilot.snapshot.json",
+    defaultConflictPolicy: "keep-both",
+    aliases: ["vscode-file", "copilot-file"],
+    notes: [
+      "Use outbound snapshot for VS Code scripts that need shared agent memory.",
+      "Write VS Code/Copilot generated memory into inbound snapshot file.",
+      "Use keep-both policy to avoid losing concurrent branches from multiple agents."
+    ]
+  },
+  {
     id: "antigravity-file",
     name: "Antigravity File Adapter",
     description: "Publish context snapshots for Antigravity local automations.",
@@ -69,6 +94,43 @@ export const BUILTIN_ADAPTER_PROFILES: AdapterProfile[] = [
       "Route Antigravity export output into inbound snapshot file.",
       "Consume outbound snapshot from Antigravity tasks requiring shared memory.",
       "Use watch mode for continuous local synchronization."
+    ]
+  },
+  {
+    id: "cursor-mcp",
+    name: "Cursor MCP Adapter",
+    description: "Register pluro as an MCP stdio server inside Cursor.",
+    tool: "cursor",
+    syncMode: "mcp",
+    suggestedPath: "context/cursor-mcp",
+    notes: [
+      "Register command 'pluro daemon mcp' in Cursor MCP settings.",
+      "Use MCP tools for low-latency context create/list/get/delete operations."
+    ]
+  },
+  {
+    id: "vscode-copilot-mcp",
+    name: "VS Code Copilot MCP Adapter",
+    description: "Register pluro as an MCP stdio server in VS Code GitHub Copilot Chat.",
+    tool: "vscode-copilot",
+    syncMode: "mcp",
+    suggestedPath: "context/vscode-copilot-mcp",
+    aliases: ["vscode-mcp", "copilot-mcp"],
+    notes: [
+      "Register command 'pluro daemon mcp' in VS Code MCP server settings.",
+      "Prefer MCP mode in VS Code for tool-native context access and lower sync lag."
+    ]
+  },
+  {
+    id: "antigravity-mcp",
+    name: "Antigravity MCP Adapter",
+    description: "Register pluro as an MCP stdio server in Antigravity.",
+    tool: "antigravity",
+    syncMode: "mcp",
+    suggestedPath: "context/antigravity-mcp",
+    notes: [
+      "Register command 'pluro daemon mcp' in Antigravity MCP configuration.",
+      "Use MCP mode to reduce file churn in high-frequency agent loops."
     ]
   },
   {
@@ -99,3 +161,33 @@ export const BUILTIN_ADAPTER_PROFILES: AdapterProfile[] = [
     ]
   }
 ];
+
+function normalizeProfileKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function findAdapterProfileById(profileId: string): AdapterProfile | undefined {
+  const normalized = normalizeProfileKey(profileId);
+
+  return BUILTIN_ADAPTER_PROFILES.find((profile) => {
+    if (normalizeProfileKey(profile.id) === normalized) {
+      return true;
+    }
+
+    return (profile.aliases ?? []).some((alias) => normalizeProfileKey(alias) === normalized);
+  });
+}
+
+export function listPrimaryIdeProfiles(syncMode?: AdapterSyncMode): AdapterProfile[] {
+  return BUILTIN_ADAPTER_PROFILES.filter((profile) => {
+    if (!PRIMARY_IDE_TOOLS.includes(profile.tool)) {
+      return false;
+    }
+
+    if (syncMode && profile.syncMode !== syncMode) {
+      return false;
+    }
+
+    return true;
+  });
+}

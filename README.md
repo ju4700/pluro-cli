@@ -6,6 +6,16 @@
 
 Pluro is a local-first context bridge CLI that lets multiple LLM tools and agentic IDEs share structured context on one machine.
 
+## Primary IDE Focus
+
+Pluro prioritizes three agentic IDEs as first-class integrations:
+
+- Cursor
+- VS Code (GitHub Copilot)
+- Antigravity
+
+Current connector commands support this focus directly while still keeping generic profiles for future IDEs and tools.
+
 ## Current Status
 
 This repository now includes the first working implementation:
@@ -145,7 +155,19 @@ Any MCP client that supports stdio can use:
 Bootstrap a Cursor adapter profile:
 
 ```bash
-pluro connector init cursor-file
+pluro connector bootstrap --sync-mode file-sync
+```
+
+List only primary IDE profiles:
+
+```bash
+pluro connector list --focus primary
+```
+
+List only primary IDE MCP profiles:
+
+```bash
+pluro connector list --focus primary --sync-mode mcp
 ```
 
 Run one-shot bidirectional sync:
@@ -181,7 +203,7 @@ Environment variable alternative:
 - `context add|get|list|update|delete`
 - `snapshot export|import`
 - `history`
-- `connector list|init|sync|watch`
+- `connector list|bootstrap|init|sync|watch`
 - `daemon run|status|mcp`
 
 ## Verification
@@ -213,3 +235,4 @@ Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 - In CI/headless Linux, set `PLURO_DISABLE_KEYCHAIN=1` to avoid keychain provider issues.
 - File-sync adapters include inbound and outbound snapshot files plus profile notes.
 - MCP mode is exposed over stdio so it can be registered in MCP-capable clients.
+- Generic and terminal profiles remain available to add new IDEs/tools without breaking core flows.

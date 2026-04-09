@@ -6,6 +6,7 @@ import { z } from "zod";
 import { contextSnapshotSchema, type ContextSnapshot } from "../core/types";
 import {
   BUILTIN_ADAPTER_PROFILES,
+  findAdapterProfileById,
   type AdapterProfile,
   type AdapterSyncMode,
   type AdapterConflictPolicy
@@ -89,7 +90,7 @@ export class FileAdapterEngine {
   }
 
   createProfileTemplate(profileId: string): AdapterTemplateResult {
-    const profile = BUILTIN_ADAPTER_PROFILES.find((item) => item.id === profileId);
+    const profile = findAdapterProfileById(profileId);
     if (!profile) {
       throw new Error(`Unknown profile: ${profileId}`);
     }
