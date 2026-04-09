@@ -86,3 +86,32 @@ test("connector status reports healthy for explicit adapter file", () => {
     assert.equal(payload.statuses[0]?.health, "healthy");
   });
 });
+
+test("connector status supports table output format", () => {
+  withTempDir((dataDir) => {
+    const engine = new FileAdapterEngine(dataDir);
+    engine.createProfileTemplate("cursor-file");
+    engine.createProfileTemplate("vscode-copilot-file");
+    engine.createProfileTemplate("antigravity-file");
+
+    const result = runCli([
+      "--data-dir",
+      dataDir,
+      "connector",
+      "status",
+      "--focus",
+      "primary",
+      "--sync-mode",
+      "file-sync",
+      "--format",
+      "table"
+    ]);
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.ok(result.stdout.includes("Connector Status (primary, sync=file-sync)"));
+    assert.ok(result.stdout.includes("cursor-file"));
+    assert.ok(result.stdout.includes("vscode-copilot-file"));
+    assert.ok(result.stdout.includes("antigravity-file"));
+    assert.ok(result.stdout.includes("Summary:"));
+  });
+});

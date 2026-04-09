@@ -87,6 +87,7 @@ interface ConnectorStatusCliOptions {
   focus: string;
   syncMode?: string;
   outputDir?: string;
+  format: string;
 }
 
 interface ConnectorStatusTarget {
@@ -95,6 +96,45 @@ interface ConnectorStatusTarget {
   expectedProfileName?: string;
   expectedTool?: string;
   expectedSyncMode?: AdapterSyncMode;
+}
+
+interface ConnectorStatusSummary {
+  total: number;
+  healthy: number;
+  warning: number;
+  error: number;
+}
+
+interface ConnectorStatusRow {
+  adapterFile: string;
+  profileId?: string;
+  expectedProfileId?: string;
+  expectedProfileName?: string;
+  tool?: string;
+  expectedTool?: string;
+  syncMode?: string;
+  expectedSyncMode?: string;
+  configured?: boolean;
+  health: string;
+  checkedAt?: string;
+  errors?: string[];
+  warnings?: string[];
+  issues?: string[];
+}
+
+type StatusOutputFormat = "json" | "table";
+
+interface ConnectorStatusTablePayload {
+  focus: string;
+  syncMode: string;
+  checkedAt: string;
+  summary: ConnectorStatusSummary;
+  statuses: ConnectorStatusRow[];
+}
+
+interface DaemonHealthTablePayload {
+  service?: string;
+  timestamp?: string;
 }
 
 interface ConnectorSyncCliOptions {
@@ -122,6 +162,7 @@ interface DaemonStatusCliOptions {
   focus: string;
   syncMode?: string;
   compact?: boolean;
+  format: string;
 }
 
 interface SyncRetryOptions {
@@ -143,6 +184,10 @@ interface InvalidInboundRecovery {
 
 function printJson(payload: unknown): void {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function printText(payload: string): void {
+  process.stdout.write(`${payload}\n`);
 }
 
 function parseIntValue(value: string, fallback: number): number {
@@ -217,6 +262,142 @@ function parseConnectorFocus(value: string): "all" | "primary" {
   }
 
   throw new Error(`Invalid focus: ${value}. Expected all or primary.`);
+}
+
+function parseStatusOutputFormat(value: string): StatusOutputFormat {
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "json" || normalized === "table") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid format: ${value}. Expected json or table.`);
+}
+
+function formatDaemonHealthTable(url: string, payload: DaemonHealthTablePayload): string {
+  const service = payload.service ?? "unknown";
+  const timestamp = payload.timestamp ?? "unknown";
+
+  return [
+    "Daemon Health",
+    `URL: ${url}`,
+    `Service: ${service}`,
+    `Timestamp: ${timestamp}`,
+    "Status: OK"
+  ].join("\n");
+}
+
+function truncateCell(value: string, width: number): string {
+  if (value.length <= width) {
+    return value;
+  }
+
+  if (width <= 1) {
+    return value.slice(0, width);
+  }
+
+  return `${value.slice(0, width - 1)}~`;
+}
+
+function padCell(value: string, width: number): string {
+  return truncateCell(value, width).padEnd(width, " ");
+}
+
+function toHealthToken(health: string): string {
+  if (health === "healthy") {
+    return "OK";
+  }
+
+  if (health === "warning") {
+    return "WARN";
+  }
+
+  return "ERR";
+}
+
+function collectStatusIssues(status: ConnectorStatusRow): string[] {
+  if (status.issues && status.issues.length > 0) {
+    return status.issues;
+  }
+
+  return [...(status.errors ?? []), ...(status.warnings ?? [])];
+}
+
+function formatConnectorStatusTable(payload: ConnectorStatusTablePayload): string {
+  const lines: string[] = [];
+
+  lines.push(`Connector Status (${payload.focus}, sync=${payload.syncMode})`);
+  lines.push(`Checked: ${payload.checkedAt}`);
+  lines.push(
+    `Summary: total=${payload.summary.total} healthy=${payload.summary.healthy} warning=${payload.summary.warning} error=${payload.summary.error}`
+  );
+  lines.push("");
+
+  const header = [
+    padCell("HEALTH", 7),
+    padCell("PROFILE", 24),
+    padCell("MODE", 10),
+    padCell("TOOL", 16),
+    padCell("ISSUES", 6),
+    "ADAPTER"
+  ].join(" ");
+
+  const divider = [
+    "-".repeat(7),
+    "-".repeat(24),
+    "-".repeat(10),
+    "-".repeat(16),
+    "-".repeat(6),
+    "-".repeat(28)
+  ].join(" ");
+
+  lines.push(header);
+  lines.push(divider);
+
+  for (const status of payload.statuses) {
+    const profile = status.expectedProfileId ?? status.profileId ?? "-";
+    const tool = status.tool ?? status.expectedTool ?? "-";
+    const mode = status.syncMode ?? status.expectedSyncMode ?? "-";
+    const issues = collectStatusIssues(status).length;
+    const adapterName = path.basename(status.adapterFile);
+
+    lines.push(
+      [
+        padCell(toHealthToken(status.health), 7),
+        padCell(profile, 24),
+        padCell(mode, 10),
+        padCell(tool, 16),
+        padCell(String(issues), 6),
+        truncateCell(adapterName, 28)
+      ].join(" ")
+    );
+  }
+
+  const issueLines: string[] = [];
+
+  for (const status of payload.statuses) {
+    const issues = collectStatusIssues(status);
+    if (issues.length === 0) {
+      continue;
+    }
+
+    const label = status.expectedProfileId ?? status.profileId ?? path.basename(status.adapterFile);
+    for (const issue of issues) {
+      issueLines.push(`- ${label}: ${issue}`);
+    }
+  }
+
+  if (issueLines.length > 0) {
+    lines.push("");
+    lines.push("Issues:");
+    lines.push(...issueLines.slice(0, 20));
+
+    if (issueLines.length > 20) {
+      lines.push(`- ... ${issueLines.length - 20} more`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 function getErrorMessage(error: unknown): string {
@@ -678,6 +859,7 @@ connectorCommand
   .option("--focus <focus>", "all or primary (used when no adapter files are passed)", "primary")
   .option("--sync-mode <mode>", "Filter discovered profiles by sync mode: file-sync or mcp")
   .option("--output-dir <path>", "Base directory for profile discovery")
+  .option("--format <format>", "json or table", "json")
   .action(
     (
       adapterFiles: string[] | undefined,
@@ -686,6 +868,7 @@ connectorCommand
     ) => {
       const focus = parseConnectorFocus(String(options.focus));
       const syncMode = options.syncMode ? parseAdapterSyncMode(options.syncMode) : undefined;
+      const outputFormat = parseStatusOutputFormat(options.format);
       const requestedFiles = Array.isArray(adapterFiles)
         ? adapterFiles
         : adapterFiles
@@ -715,7 +898,7 @@ connectorCommand
               expectedSyncMode: profile.syncMode
             }));
 
-      const statuses = targets.map((target) => ({
+      const statuses: ConnectorStatusRow[] = targets.map((target) => ({
         expectedProfileId: target.expectedProfileId,
         expectedProfileName: target.expectedProfileName,
         expectedTool: target.expectedTool,
@@ -723,14 +906,14 @@ connectorCommand
         ...engine.getAdapterStatus(target.adapterFile)
       }));
 
-      const summary = {
+      const summary: ConnectorStatusSummary = {
         total: statuses.length,
         healthy: statuses.filter((status) => status.health === "healthy").length,
         warning: statuses.filter((status) => status.health === "warning").length,
         error: statuses.filter((status) => status.health === "error").length
       };
 
-      printJson({
+      const responsePayload = {
         ok: true,
         focus: requestedFiles.length > 0 ? "custom" : focus,
         syncMode: syncMode ?? "all",
@@ -738,7 +921,22 @@ connectorCommand
         checkedAt: new Date().toISOString(),
         summary,
         statuses
-      });
+      };
+
+      if (outputFormat === "table") {
+        printText(
+          formatConnectorStatusTable({
+            focus: responsePayload.focus,
+            syncMode: responsePayload.syncMode,
+            checkedAt: responsePayload.checkedAt,
+            summary: responsePayload.summary,
+            statuses: responsePayload.statuses
+          })
+        );
+        return;
+      }
+
+      printJson(responsePayload);
     }
   );
 
@@ -1026,10 +1224,12 @@ daemonCommand
   .option("--focus <focus>", "all or primary for connector status", "primary")
   .option("--sync-mode <mode>", "Filter connector status by sync mode: file-sync or mcp")
   .option("--compact", "Compact connector status output", false)
+  .option("--format <format>", "json or table", "json")
   .action(async (options: DaemonStatusCliOptions) => {
     const host = options.host;
     const port = parseIntValue(String(options.port), DEFAULT_DAEMON_PORT);
     const focus = parseConnectorFocus(options.focus);
+    const outputFormat = parseStatusOutputFormat(options.format);
 
     let url = `http://${host}:${port}/health`;
 
@@ -1060,7 +1260,33 @@ daemonCommand
       const payload = (await response.json()) as unknown;
 
       if (options.connectors) {
+        if (outputFormat === "table") {
+          const connectorPayload = payload as {
+            checkedAt?: string;
+            syncMode?: string;
+            summary: ConnectorStatusSummary;
+            statuses: ConnectorStatusRow[];
+          };
+
+          printText(
+            formatConnectorStatusTable({
+              focus,
+              syncMode: connectorPayload.syncMode ?? (options.syncMode ?? "all"),
+              checkedAt: connectorPayload.checkedAt ?? new Date().toISOString(),
+              summary: connectorPayload.summary,
+              statuses: connectorPayload.statuses
+            })
+          );
+          return;
+        }
+
         printJson({ running: true, url, connectors: payload });
+        return;
+      }
+
+      if (outputFormat === "table") {
+        const healthPayload = payload as DaemonHealthTablePayload;
+        printText(formatDaemonHealthTable(url, healthPayload));
         return;
       }
 

@@ -88,6 +88,12 @@ Check connector health through daemon status API:
 pluro daemon status --port 43111 --connectors --focus primary --compact
 ```
 
+Show daemon connector health in a terminal-friendly table:
+
+```bash
+pluro daemon status --port 43111 --connectors --focus primary --format table
+```
+
 Run MCP stdio server:
 
 ```bash
@@ -182,6 +188,12 @@ Check primary IDE adapter health at a glance:
 pluro connector status --focus primary
 ```
 
+Render adapter health as a table:
+
+```bash
+pluro connector status --focus primary --format table
+```
+
 Check one adapter file explicitly:
 
 ```bash
@@ -236,6 +248,11 @@ Daemon connector status endpoint:
 
 - `GET /connectors/status?focus=primary|all&syncMode=file-sync|mcp&compact=1`
 - `adapterFile` query param can be repeated to inspect explicit adapter files.
+
+Status command output formats:
+
+- `--format json` (default)
+- `--format table` for a compact terminal-friendly view
 
 ## Verification
 
