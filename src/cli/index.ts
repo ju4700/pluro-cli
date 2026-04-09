@@ -12,7 +12,7 @@ import { ensureDataDirectory, resolvePaths, type PluroPaths } from "../core/conf
 import { ContextService } from "../core/context-service";
 import { EncryptionService } from "../core/security/encryption";
 import { SqliteStore } from "../core/storage/sqlite";
-import type { CreateContextInput, SearchContextFilters, UpdateContextInput } from "../core/types";
+import type { SearchContextFilters, UpdateContextInput } from "../core/types";
 import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from "../daemon/protocol";
 import { runMcpStdioServer } from "../daemon/mcp-server";
 import { startDaemonServer } from "../daemon/server";
@@ -22,6 +22,63 @@ interface GlobalCliOptions {
   dbPath?: string;
   passphrase?: string;
   disableKeychain?: boolean;
+}
+
+interface ContextAddCliOptions {
+  source: string;
+  scope: string;
+  tag?: string[];
+  meta?: string[];
+  encrypt?: boolean;
+}
+
+interface ContextListCliOptions {
+  source?: string;
+  scope?: string;
+  tag?: string;
+  limit: string;
+}
+
+interface ContextUpdateCliOptions {
+  content?: string;
+  source?: string;
+  scope?: string;
+  tag?: string[];
+  meta?: string[];
+  encrypt?: boolean;
+  decrypt?: boolean;
+}
+
+interface SnapshotImportCliOptions {
+  policy: string;
+}
+
+interface HistoryCliOptions {
+  limit: string;
+}
+
+interface ConnectorInitCliOptions {
+  outputDir?: string;
+}
+
+interface ConnectorSyncCliOptions {
+  direction: string;
+}
+
+interface ConnectorWatchCliOptions {
+  direction: string;
+  debounceMs: string;
+  runInitial?: boolean;
+}
+
+interface DaemonRunCliOptions {
+  host: string;
+  port: string;
+}
+
+interface DaemonStatusCliOptions {
+  host: string;
+  port: string;
 }
 
 function printJson(payload: unknown): void {
@@ -203,7 +260,7 @@ contextCommand
   .option("--tag <tag...>", "Tags for indexing")
   .option("--meta <key=value...>", "Metadata key=value pairs")
   .option("--encrypt", "Encrypt content at rest", false)
-  .action(async (content: string, options: any, command: Command) => {
+  .action(async (content: string, options: ContextAddCliOptions, command: Command) => {
     await withService(command, async (service) => {
       const entry = await service.addContext({
         content,
@@ -226,7 +283,7 @@ contextCommand
   .option("--scope <scope>", "Filter by scope")
   .option("--tag <tag>", "Filter by tag")
   .option("--limit <number>", "Maximum number of records", "50")
-  .action(async (query: string | undefined, options: any, command: Command) => {
+  .action(async (query: string | undefined, options: ContextListCliOptions, command: Command) => {
     await withService(command, async (service) => {
       const filters: SearchContextFilters = {
         query,
@@ -245,7 +302,7 @@ contextCommand
   .command("get")
   .description("Get one context entry")
   .argument("<id>", "Entry id")
-  .action(async (id: string, _options: any, command: Command) => {
+  .action(async (id: string, _options: unknown, command: Command) => {
     await withService(command, async (service) => {
       const entry = await service.getContext(id);
       if (!entry) {
@@ -267,7 +324,7 @@ contextCommand
   .option("--meta <key=value...>", "Replace metadata")
   .option("--encrypt", "Store encrypted")
   .option("--decrypt", "Store unencrypted")
-  .action(async (id: string, options: any, command: Command) => {
+  .action(async (id: string, options: ContextUpdateCliOptions, command: Command) => {
     const encrypt = options.encrypt ? true : options.decrypt ? false : undefined;
 
     const payload: UpdateContextInput = {};
@@ -308,7 +365,7 @@ contextCommand
   .command("delete")
   .description("Delete a context entry")
   .argument("<id>", "Entry id")
-  .action(async (id: string, _options: any, command: Command) => {
+  .action(async (id: string, _options: unknown, command: Command) => {
     await withService(command, async (service) => {
       const deleted = await service.deleteContext(id);
       printJson({ id, deleted });
@@ -321,7 +378,7 @@ snapshotCommand
   .command("export")
   .description("Export all context to a snapshot file")
   .argument("<file>", "Output file path")
-  .action(async (file: string, _options: any, command: Command) => {
+  .action(async (file: string, _options: unknown, command: Command) => {
     await withService(command, async (service) => {
       const snapshot = await service.exportSnapshot();
       const filePath = path.resolve(file);
@@ -342,7 +399,7 @@ snapshotCommand
   .description("Import a snapshot file")
   .argument("<file>", "Input file path")
   .option("--policy <policy>", "Conflict policy: lww or keep-both", "lww")
-  .action(async (file: string, options: any, command: Command) => {
+  .action(async (file: string, options: SnapshotImportCliOptions, command: Command) => {
     await withService(command, async (service) => {
       const filePath = path.resolve(file);
       const payload = fs.readFileSync(filePath, "utf8");
@@ -363,7 +420,7 @@ program
   .description("Show context change history")
   .argument("[entryId]", "Optional entry id")
   .option("--limit <number>", "Maximum history rows", "100")
-  .action(async (entryId: string | undefined, options: any, command: Command) => {
+  .action(async (entryId: string | undefined, options: HistoryCliOptions, command: Command) => {
     await withService(command, async (service) => {
       const history = service.listHistory(entryId, parseIntValue(String(options.limit), 100));
       printJson(history);
@@ -384,7 +441,7 @@ connectorCommand
   .description("Create an adapter profile template file")
   .argument("<profileId>", "Adapter profile id")
   .option("--output-dir <path>", "Directory for adapter config files")
-  .action((profileId: string, options: any, command: Command) => {
+  .action((profileId: string, options: ConnectorInitCliOptions, command: Command) => {
     const globals = getGlobalOptions(command);
     const paths = resolvePaths({ dataDir: globals.dataDir, dbPath: globals.dbPath });
     const outputDir = options.outputDir ? path.resolve(options.outputDir) : paths.dataDir;
@@ -404,7 +461,7 @@ connectorCommand
   .description("Run one-shot adapter synchronization")
   .argument("<adapterFile>", "Path to adapter config JSON")
   .option("--direction <direction>", "import, export, or bidirectional", "bidirectional")
-  .action(async (adapterFile: string, options: any, command: Command) => {
+  .action(async (adapterFile: string, options: ConnectorSyncCliOptions, command: Command) => {
     const direction = parseSyncDirection(String(options.direction));
 
     await withService(command, async (service, paths) => {
@@ -422,7 +479,7 @@ connectorCommand
   .option("--direction <direction>", "import, export, or bidirectional", "bidirectional")
   .option("--debounce-ms <number>", "Debounce delay for file events", "500")
   .option("--no-run-initial", "Skip initial one-shot sync before watching")
-  .action(async (adapterFile: string, options: any, command: Command) => {
+  .action(async (adapterFile: string, options: ConnectorWatchCliOptions, command: Command) => {
     const direction = parseSyncDirection(String(options.direction));
     const debounceMs = parseIntValue(String(options.debounceMs), 500);
     const runInitial = options.runInitial !== false;
@@ -521,7 +578,7 @@ daemonCommand
   .description("Run daemon in foreground")
   .option("--host <host>", "Host to bind", DEFAULT_DAEMON_HOST)
   .option("--port <number>", "Port to bind", String(DEFAULT_DAEMON_PORT))
-  .action(async (options: any, command: Command) => {
+  .action(async (options: DaemonRunCliOptions, command: Command) => {
     await withService(command, async (service) => {
       const host = options.host;
       const port = parseIntValue(String(options.port), DEFAULT_DAEMON_PORT);
@@ -550,7 +607,7 @@ daemonCommand
   .description("Check daemon health endpoint")
   .option("--host <host>", "Host to query", DEFAULT_DAEMON_HOST)
   .option("--port <number>", "Port to query", String(DEFAULT_DAEMON_PORT))
-  .action(async (options: any) => {
+  .action(async (options: DaemonStatusCliOptions) => {
     const host = options.host;
     const port = parseIntValue(String(options.port), DEFAULT_DAEMON_PORT);
     const url = `http://${host}:${port}/health`;
@@ -576,7 +633,7 @@ daemonCommand
 daemonCommand
   .command("mcp")
   .description("Run MCP server over stdio transport")
-  .action(async (_options: any, command: Command) => {
+  .action(async (_options: unknown, command: Command) => {
     await withService(command, async (service) => {
       await runMcpStdioServer(service);
     });
