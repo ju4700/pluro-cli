@@ -58,7 +58,49 @@ After linking, use:
 pluro --help
 ```
 
-The package exposes both `pluro` and `pluro-cli` command names.
+The package exposes `pluro`, `pluro-cli`, and `pluro-tui` command names.
+
+## Terminal UI (Preview)
+
+Launch the full-screen terminal UI:
+
+```bash
+pluro-tui --ide vscode-copilot
+```
+
+Global keys:
+
+- `Tab` / `Shift+Tab`: switch panels
+- `1` / `2` / `3`: jump to Dashboard, Conversations, Contexts
+- `q`: quit
+
+Conversation panel keys:
+
+- `s`: scan selected IDE
+- `i`: cycle IDE filter
+- `c`: cycle confidence filter
+- `o`: cycle source filter
+- `/`: edit project text query filter
+- `f`: edit source text query filter
+- `e`: clear text query filters
+- `r`: refresh indexed rows
+- `Enter`: open inject options modal for selected conversation
+
+Inject modal keys:
+
+- `p`: cycle conflict policy (`keep-both`, `lww`)
+- `g`: cycle import scope (`project`, `session`, `global`)
+- `u`: toggle skip unchanged mode
+- `t`: edit comma-separated tags
+- `Enter`: confirm injection
+- `Esc`: cancel modal
+
+Context panel keys:
+
+- `g`: cycle scope filter
+- `r`: refresh rows
+- `d`: start delete confirmation
+- `y` / `n`: confirm or cancel deletion
 
 ## Quick Start
 
