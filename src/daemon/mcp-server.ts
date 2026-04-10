@@ -68,6 +68,8 @@ const conversationScanArgsSchema = z.object({
 const conversationListArgsSchema = z.object({
   ide: z.enum(["cursor", "vscode-copilot", "antigravity"]).optional(),
   projectPath: z.string().optional(),
+  projectConfidence: z.enum(["high", "medium", "low"]).optional(),
+  projectSource: z.string().optional(),
   limit: z.number().int().min(1).max(5000).optional()
 });
 
@@ -240,6 +242,8 @@ const TOOL_DEFINITIONS: Tool[] = [
       properties: {
         ide: { type: "string", enum: ["cursor", "vscode-copilot", "antigravity"] },
         projectPath: { type: "string" },
+        projectConfidence: { type: "string", enum: ["high", "medium", "low"] },
+        projectSource: { type: "string" },
         limit: { type: "number" }
       }
     }
@@ -346,10 +350,18 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
       if (toolName === "pluro_conversation_list") {
         const payload = conversationListArgsSchema.parse(args);
         const discovery = new ConversationDiscoveryService(service);
-        const conversations = discovery.list(payload.ide, payload.projectPath, payload.limit ?? 200);
+        const conversations = discovery.list({
+          ide: payload.ide,
+          projectPath: payload.projectPath,
+          projectConfidence: payload.projectConfidence,
+          projectSource: payload.projectSource,
+          limit: payload.limit ?? 200
+        });
         return toToolResult({
           ide: payload.ide ?? "all",
           projectPath: payload.projectPath,
+          projectConfidence: payload.projectConfidence ?? "all",
+          projectSource: payload.projectSource ?? "all",
           conversations,
           total: conversations.length
         });

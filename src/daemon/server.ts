@@ -116,6 +116,19 @@ function parseSupportedIde(value: string | null): SupportedIde {
   throw new Error(`Invalid ide: ${value}. Expected cursor, vscode-copilot, or antigravity.`);
 }
 
+function parseProjectConfidence(value: string | null): "high" | "medium" | "low" | undefined {
+  if (!value || value.trim() === "") {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "high" || normalized === "medium" || normalized === "low") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid projectConfidence: ${value}. Expected high, medium, or low.`);
+}
+
 export async function startDaemonServer(
   service: ContextService,
   options: DaemonServerOptions = {}
@@ -215,15 +228,25 @@ export async function startDaemonServer(
         const ideRaw = url.searchParams.get("ide");
         const ide = ideRaw ? parseSupportedIde(ideRaw) : undefined;
         const projectPath = url.searchParams.get("projectPath") ?? undefined;
+        const projectConfidence = parseProjectConfidence(url.searchParams.get("projectConfidence"));
+        const projectSource = url.searchParams.get("projectSource") ?? undefined;
         const limit = parseOptionalInt(url.searchParams.get("limit")) ?? 200;
 
         const discovery = new ConversationDiscoveryService(service);
-        const conversations = discovery.list(ide, projectPath, limit);
+        const conversations = discovery.list({
+          ide,
+          projectPath,
+          projectConfidence,
+          projectSource,
+          limit
+        });
 
         sendJson(res, 200, {
           ok: true,
           ide: ide ?? "all",
           projectPath,
+          projectConfidence: projectConfidence ?? "all",
+          projectSource: projectSource ?? "all",
           total: conversations.length,
           conversations
         });

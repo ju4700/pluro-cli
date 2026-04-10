@@ -32,12 +32,20 @@ function runCli(args: string[]): { code: number | null; stdout: string; stderr: 
   };
 }
 
-function writeConversationFixture(rootDir: string): void {
+function writeConversationFixture(
+  rootDir: string,
+  options: {
+    includeProjectPath?: boolean;
+    model?: string;
+  } = {}
+): void {
   fs.mkdirSync(rootDir, { recursive: true });
 
-  const fixture = {
+  const includeProjectPath = options.includeProjectPath !== false;
+  const fixture: Record<string, unknown> = {
     title: "Conversation Fixture",
-    projectPath: path.join(rootDir, "project-a"),
+    ...(includeProjectPath ? { projectPath: path.join(rootDir, "project-a") } : {}),
+    ...(options.model ? { model: options.model } : {}),
     messages: [
       {
         role: "user",
@@ -52,6 +60,94 @@ function writeConversationFixture(rootDir: string): void {
 
   fs.writeFileSync(path.join(rootDir, "conversation.json"), `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
 }
+
+test("conversation scan assigns high confidence for explicit project metadata", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "cursor-storage");
+
+    writeConversationFixture(scanRoot);
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "cursor",
+      "--root",
+      scanRoot,
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(scanResult.code, 0, scanResult.stderr);
+
+    const scanPayload = JSON.parse(scanResult.stdout) as {
+      conversations: Array<{
+        projectPath?: string;
+        projectConfidence?: string;
+        projectSource?: string;
+        projectGroup?: string;
+      }>;
+    };
+
+    const conversation = scanPayload.conversations[0];
+    assert.ok(conversation?.projectPath);
+    assert.equal(conversation?.projectConfidence, "high");
+    assert.equal(conversation?.projectSource, "metadata");
+    assert.equal(conversation?.projectGroup, conversation?.projectPath);
+  });
+});
+
+test("conversation scan derives workspace metadata and fallback group", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "Code");
+    const storageRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(storageRoot, {
+      includeProjectPath: false,
+      model: "gpt-4o-mini"
+    });
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "vscode-copilot",
+      "--root",
+      scanRoot,
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(scanResult.code, 0, scanResult.stderr);
+
+    const scanPayload = JSON.parse(scanResult.stdout) as {
+      conversations: Array<{
+        projectPath?: string;
+        projectConfidence?: string;
+        projectSource?: string;
+        projectGroup?: string;
+        metadata: Record<string, string>;
+      }>;
+    };
+
+    const conversation = scanPayload.conversations[0];
+    assert.equal(conversation?.projectPath, undefined);
+    assert.equal(conversation?.projectConfidence, "low");
+    assert.equal(conversation?.projectSource, "workspace-storage");
+    assert.ok(conversation?.projectGroup?.includes("workspace-123"));
+    assert.equal(conversation?.metadata.workspaceId, "workspace-123");
+    assert.equal(conversation?.metadata.ideChannel, "stable");
+    assert.equal(conversation?.metadata.model, "gpt-4o-mini");
+    assert.ok((conversation?.metadata.roles ?? "").includes("user:1"));
+    assert.ok((conversation?.metadata.roles ?? "").includes("assistant:1"));
+  });
+});
 
 test("conversation scan/list/inject supports idempotent re-import", () => {
   withTempDir((tempDir) => {
@@ -296,5 +392,138 @@ test("conversation inject without id in non-interactive mode suggests --select",
 
     assert.equal(injectResult.code, 1);
     assert.ok(injectResult.stderr.includes("--select <number>"));
+  });
+});
+
+test("conversation list filters by project confidence and source", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "vscode-copilot",
+      "--root",
+      scanRoot,
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(scanResult.code, 0, scanResult.stderr);
+
+    const listHigh = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "list",
+      "--ide",
+      "vscode-copilot",
+      "--project-confidence",
+      "high",
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(listHigh.code, 0, listHigh.stderr);
+    const listHighPayload = JSON.parse(listHigh.stdout) as {
+      total: number;
+      conversations: Array<{ projectConfidence?: string; projectSource?: string }>;
+    };
+
+    assert.equal(listHighPayload.total, 1);
+    assert.equal(listHighPayload.conversations[0]?.projectConfidence, "high");
+    assert.equal(listHighPayload.conversations[0]?.projectSource, "metadata");
+
+    const listSource = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "list",
+      "--ide",
+      "vscode-copilot",
+      "--project-source",
+      "workspace-storage",
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(listSource.code, 0, listSource.stderr);
+    const listSourcePayload = JSON.parse(listSource.stdout) as {
+      total: number;
+      conversations: Array<{ projectConfidence?: string; projectSource?: string }>;
+    };
+
+    assert.equal(listSourcePayload.total, 1);
+    assert.equal(listSourcePayload.conversations[0]?.projectConfidence, "low");
+    assert.equal(listSourcePayload.conversations[0]?.projectSource, "workspace-storage");
+  });
+});
+
+test("conversation list summary includes scoring details and supports low-confidence fail flag", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "vscode-copilot",
+      "--root",
+      scanRoot,
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(scanResult.code, 0, scanResult.stderr);
+
+    const summaryResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "list",
+      "--ide",
+      "vscode-copilot",
+      "--format",
+      "summary"
+    ]);
+
+    assert.equal(summaryResult.code, 0, summaryResult.stderr);
+    assert.ok(summaryResult.stdout.includes("projectHigh=1"));
+    assert.ok(summaryResult.stdout.includes("projectLow=1"));
+    assert.ok(summaryResult.stdout.includes("projectResolved=1"));
+    assert.ok(summaryResult.stdout.includes("projectGroupedFallback=1"));
+    assert.ok(summaryResult.stdout.includes("projectSource=metadata:1,workspace-storage:1"));
+
+    const failResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "list",
+      "--ide",
+      "vscode-copilot",
+      "--format",
+      "summary",
+      "--fail-on-low-confidence"
+    ]);
+
+    assert.equal(failResult.code, 1);
+    assert.ok(failResult.stdout.includes("conversation_list"));
   });
 });

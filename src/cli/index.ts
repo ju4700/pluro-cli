@@ -197,8 +197,12 @@ interface ConversationScanCliOptions {
 interface ConversationListCliOptions {
   ide?: string;
   project?: string;
+  projectConfidence?: string;
+  projectSource?: string;
   limit: string;
   format: string;
+  failOnLowConfidence?: boolean;
+  failOnUnresolvedProject?: boolean;
 }
 
 interface ConversationInjectCliOptions {
@@ -214,6 +218,16 @@ interface ConversationInjectCliOptions {
   targetProfile?: string;
   targetAdapter?: string;
   format: string;
+}
+
+interface ConversationProjectStats {
+  high: number;
+  medium: number;
+  low: number;
+  resolved: number;
+  groupedFallback: number;
+  ungrouped: number;
+  bySource: Map<string, number>;
 }
 
 interface StatusFailureOptions {
@@ -342,6 +356,16 @@ function parseSupportedIde(value: string): SupportedIde {
   );
 }
 
+function parseProjectConfidence(value: string): "high" | "medium" | "low" {
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "high" || normalized === "medium" || normalized === "low") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid project confidence: ${value}. Expected high, medium, or low.`);
+}
+
 function toOverallHealth(summary: ConnectorStatusSummary): "healthy" | "warning" | "error" {
   if (summary.error > 0) {
     return "error";
@@ -400,6 +424,8 @@ function formatDaemonHealthSummary(url: string, payload: DaemonHealthTablePayloa
 
 function formatConversationScanSummary(payload: ConversationScanResult): string {
   const overall = payload.errors.length > 0 ? "error" : payload.skipped > 0 ? "warning" : "healthy";
+  const stats = collectConversationProjectStats(payload.conversations);
+  const sourceBreakdown = formatProjectSourceBreakdown(stats.bySource);
 
   return [
     "conversation_scan",
@@ -409,6 +435,13 @@ function formatConversationScanSummary(payload: ConversationScanResult): string 
     `discovered=${payload.discovered}`,
     `skipped=${payload.skipped}`,
     `errors=${payload.errors.length}`,
+    `projectHigh=${stats.high}`,
+    `projectMedium=${stats.medium}`,
+    `projectLow=${stats.low}`,
+    `projectResolved=${stats.resolved}`,
+    `projectGroupedFallback=${stats.groupedFallback}`,
+    `projectUngrouped=${stats.ungrouped}`,
+    `projectSource=${sourceBreakdown || "none"}`,
     `overall=${overall}`,
     `scannedAt=${payload.scannedAt}`
   ].join(" ");
@@ -427,20 +460,24 @@ function formatConversationScanTable(payload: ConversationScanResult): string {
     [
       padCell("IDE", 14),
       padCell("PROJECT", 26),
+      padCell("CONF", 7),
       padCell("MESSAGES", 9),
       padCell("FORMAT", 16),
       "TITLE"
     ].join(" ")
   );
   lines.push(
-    ["-".repeat(14), "-".repeat(26), "-".repeat(9), "-".repeat(16), "-".repeat(36)].join(" ")
+    ["-".repeat(14), "-".repeat(26), "-".repeat(7), "-".repeat(9), "-".repeat(16), "-".repeat(36)].join(" ")
   );
 
   for (const conversation of payload.conversations.slice(0, 50)) {
+    const project = conversation.projectPath ?? conversation.projectGroup ?? "unknown";
+
     lines.push(
       [
         padCell(conversation.ide, 14),
-        padCell(conversation.projectPath ?? "unknown", 26),
+        padCell(project, 26),
+        padCell(conversation.projectConfidence ?? "-", 7),
         padCell(String(conversation.messageCount), 9),
         padCell(conversation.format, 16),
         truncateCell(conversation.title, 36)
@@ -470,6 +507,8 @@ function formatConversationScanTable(payload: ConversationScanResult): string {
 
 function formatConversationListSummary(conversations: DiscoveredConversation[]): string {
   const byIde = new Map<string, number>();
+  const stats = collectConversationProjectStats(conversations);
+  const sourceBreakdown = formatProjectSourceBreakdown(stats.bySource);
 
   for (const conversation of conversations) {
     byIde.set(conversation.ide, (byIde.get(conversation.ide) ?? 0) + 1);
@@ -479,9 +518,76 @@ function formatConversationListSummary(conversations: DiscoveredConversation[]):
     .map(([ide, count]) => `${ide}:${count}`)
     .join(",");
 
-  return ["conversation_list", `total=${conversations.length}`, `byIde=${ideSummary || "none"}`].join(
-    " "
-  );
+  return [
+    "conversation_list",
+    `total=${conversations.length}`,
+    `byIde=${ideSummary || "none"}`,
+    `projectHigh=${stats.high}`,
+    `projectMedium=${stats.medium}`,
+    `projectLow=${stats.low}`,
+    `projectResolved=${stats.resolved}`,
+    `projectGroupedFallback=${stats.groupedFallback}`,
+    `projectUngrouped=${stats.ungrouped}`,
+    `projectSource=${sourceBreakdown || "none"}`
+  ].join(" ");
+}
+
+function collectConversationProjectStats(
+  conversations: DiscoveredConversation[]
+): ConversationProjectStats {
+  const stats: ConversationProjectStats = {
+    high: 0,
+    medium: 0,
+    low: 0,
+    resolved: 0,
+    groupedFallback: 0,
+    ungrouped: 0,
+    bySource: new Map<string, number>()
+  };
+
+  for (const conversation of conversations) {
+    if (conversation.projectConfidence === "high") {
+      stats.high += 1;
+    } else if (conversation.projectConfidence === "medium") {
+      stats.medium += 1;
+    } else if (conversation.projectConfidence === "low") {
+      stats.low += 1;
+    }
+
+    if (conversation.projectPath) {
+      stats.resolved += 1;
+    } else if (conversation.projectGroup) {
+      stats.groupedFallback += 1;
+    } else {
+      stats.ungrouped += 1;
+    }
+
+    const source = conversation.projectSource ?? "unknown";
+    stats.bySource.set(source, (stats.bySource.get(source) ?? 0) + 1);
+  }
+
+  return stats;
+}
+
+function formatProjectSourceBreakdown(bySource: Map<string, number>): string {
+  return [...bySource.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([source, count]) => `${source}:${count}`)
+    .join(",");
+}
+
+function applyConversationListFailurePolicy(
+  conversations: DiscoveredConversation[],
+  options: Pick<ConversationListCliOptions, "failOnLowConfidence" | "failOnUnresolvedProject">
+): void {
+  if (options.failOnLowConfidence && conversations.some((conversation) => conversation.projectConfidence === "low")) {
+    process.exitCode = 1;
+    return;
+  }
+
+  if (options.failOnUnresolvedProject && conversations.some((conversation) => !conversation.projectPath)) {
+    process.exitCode = 1;
+  }
 }
 
 function formatConversationListTable(conversations: DiscoveredConversation[]): string {
@@ -494,23 +600,27 @@ function formatConversationListTable(conversations: DiscoveredConversation[]): s
       padCell("ID", 12),
       padCell("IDE", 14),
       padCell("PROJECT", 24),
+      padCell("CONF", 7),
       padCell("MESSAGES", 9),
       padCell("FORMAT", 14),
       "TITLE"
     ].join(" ")
   );
   lines.push(
-    ["-".repeat(12), "-".repeat(14), "-".repeat(24), "-".repeat(9), "-".repeat(14), "-".repeat(34)].join(
+    ["-".repeat(12), "-".repeat(14), "-".repeat(24), "-".repeat(7), "-".repeat(9), "-".repeat(14), "-".repeat(34)].join(
       " "
     )
   );
 
   for (const conversation of conversations) {
+    const project = conversation.projectPath ?? conversation.projectGroup ?? "unknown";
+
     lines.push(
       [
         padCell(conversation.id.slice(0, 12), 12),
         padCell(conversation.ide, 14),
-        padCell(conversation.projectPath ?? "unknown", 24),
+        padCell(project, 24),
+        padCell(conversation.projectConfidence ?? "-", 7),
         padCell(String(conversation.messageCount), 9),
         padCell(conversation.format, 14),
         truncateCell(conversation.title, 34)
@@ -1280,24 +1390,39 @@ conversationCommand
   .description("List conversations discovered by the latest scan")
   .option("--ide <ide>", "Filter by IDE: cursor, vscode-copilot, or antigravity")
   .option("--project <path>", "Filter by detected project path")
+  .option("--project-confidence <level>", "Filter by project confidence: high, medium, or low")
+  .option("--project-source <source>", "Filter by project source, e.g. metadata, git-root")
   .option("--limit <number>", "Maximum rows to return", "200")
   .option("--format <format>", "json, table, or summary", "json")
+  .option("--fail-on-low-confidence", "Exit with code 1 when any listed conversation has low confidence", false)
+  .option("--fail-on-unresolved-project", "Exit with code 1 when any listed conversation has no resolved project path", false)
   .action(async (options: ConversationListCliOptions, command: Command) => {
     const outputFormat = parseStatusOutputFormat(options.format);
     const ide = options.ide ? parseSupportedIde(options.ide) : undefined;
+    const projectConfidence = options.projectConfidence
+      ? parseProjectConfidence(options.projectConfidence)
+      : undefined;
     const limit = parseIntValue(String(options.limit), 200);
 
     await withService(command, async (service) => {
       const discovery = new ConversationDiscoveryService(service);
-      const conversations = discovery.list(ide, options.project, limit);
+      const conversations = discovery.list({
+        ide,
+        projectPath: options.project,
+        projectConfidence,
+        projectSource: options.projectSource,
+        limit
+      });
 
       if (outputFormat === "summary") {
         printText(formatConversationListSummary(conversations));
+        applyConversationListFailurePolicy(conversations, options);
         return;
       }
 
       if (outputFormat === "table") {
         printText(formatConversationListTable(conversations));
+        applyConversationListFailurePolicy(conversations, options);
         return;
       }
 
@@ -1305,9 +1430,13 @@ conversationCommand
         ok: true,
         ide: ide ?? "all",
         projectPath: options.project,
+        projectConfidence: projectConfidence ?? "all",
+        projectSource: options.projectSource ?? "all",
         total: conversations.length,
         conversations
       });
+
+      applyConversationListFailurePolicy(conversations, options);
     });
   });
 
@@ -1347,7 +1476,11 @@ conversationCommand
         if (!resolvedConversationId) {
           const limit = parseIntValue(String(options.limit ?? "50"), 50);
           const ideFilter = options.ide ? parseSupportedIde(options.ide) : undefined;
-          const candidates = discovery.list(ideFilter, options.projectFilter, limit);
+          const candidates = discovery.list({
+            ide: ideFilter,
+            projectPath: options.projectFilter,
+            limit
+          });
 
           if (candidates.length === 0) {
             throw new Error(

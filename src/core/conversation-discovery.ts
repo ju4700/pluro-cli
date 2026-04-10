@@ -7,6 +7,7 @@ import type { ConflictPolicy } from "./conflict-resolution";
 import { ContextService } from "./context-service";
 import {
   contextSnapshotSchema,
+  type ConversationDiscoveryFilters,
   type ContextSnapshot,
   type ConversationInjectResult,
   type ConversationScanError,
@@ -36,6 +37,15 @@ const PROJECT_PATH_KEYS = [
   "cwd",
   "rootPath"
 ];
+
+const IDE_MARKERS = [".cursor", ".vscode", ".antigravity"];
+
+interface ProjectInference {
+  projectPath?: string;
+  confidence: "high" | "medium" | "low";
+  source: string;
+  group: string;
+}
 
 interface ParsedConversation {
   conversationKey: string;
@@ -123,6 +133,37 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function toSafeMetadataValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const clean = value.trim();
+    return clean.length > 0 ? clean : undefined;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return undefined;
+}
+
+function extractWorkspaceIdFromPath(filePath: string): string | undefined {
+  const normalized = toAbsoluteNormalized(filePath);
+  const segments = normalized.split(path.sep).filter((segment) => segment.length > 0);
+
+  for (let index = 0; index < segments.length; index += 1) {
+    if (segments[index]?.toLowerCase() !== "workspacestorage") {
+      continue;
+    }
+
+    const workspaceId = segments[index + 1];
+    if (workspaceId && workspaceId.trim().length > 0) {
+      return workspaceId;
+    }
+  }
+
+  return undefined;
+}
+
 export class ConversationDiscoveryService {
   constructor(private readonly contextService: ContextService) {}
 
@@ -178,7 +219,25 @@ export class ConversationDiscoveryService {
         }
 
         for (const conversation of parsed.conversations) {
-          const projectPath = options.projectPath ?? conversation.projectPath;
+          const sourceRoot = this.findSourceRoot(filePath, roots);
+          const workspaceId = extractWorkspaceIdFromPath(filePath);
+          const projectInference = this.inferProjectDetails({
+            ide: options.ide,
+            filePath,
+            sourceRoot,
+            explicitProjectPath: options.projectPath,
+            parsedProjectPath: conversation.projectPath,
+            workspaceId
+          });
+
+          const enrichedMetadata = this.buildIdeMetadata({
+            ide: options.ide,
+            sourceFile: filePath,
+            sourceRoot,
+            workspaceId,
+            conversation
+          });
+
           const stableKey = this.buildStableConversationKey(
             options.ide,
             filePath,
@@ -192,16 +251,16 @@ export class ConversationDiscoveryService {
             sourceHash: parsed.sourceHash,
             conversationKey: conversation.conversationKey,
             title: conversation.title,
-            projectPath,
+            projectPath: projectInference.projectPath,
+            projectConfidence: projectInference.confidence,
+            projectSource: projectInference.source,
+            projectGroup: projectInference.group,
             messageCount: conversation.messages.length,
             format: conversation.format,
             sizeBytes: parsed.sizeBytes,
             lastModifiedAt: parsed.lastModifiedAt,
             scannedAt,
-            metadata: {
-              ...conversation.metadata,
-              sourceRoot: this.findSourceRoot(filePath, roots)
-            }
+            metadata: enrichedMetadata
           });
         }
       } catch (error) {
@@ -226,12 +285,8 @@ export class ConversationDiscoveryService {
     };
   }
 
-  list(ide?: SupportedIde, projectPath?: string, limit = 200): DiscoveredConversation[] {
-    return this.contextService.listDiscoveredConversations({
-      ide,
-      projectPath,
-      limit
-    });
+  list(filters: ConversationDiscoveryFilters = {}): DiscoveredConversation[] {
+    return this.contextService.listDiscoveredConversations(filters);
   }
 
   async injectConversation(options: InjectConversationOptions): Promise<ConversationInjectResult> {
@@ -450,6 +505,10 @@ export class ConversationDiscoveryService {
         }
       }
 
+      const model = snapshot.data.entries
+        .map((entry) => entry.metadata.model)
+        .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+
       return [
         {
           conversationKey: "snapshot-v1",
@@ -458,7 +517,8 @@ export class ConversationDiscoveryService {
           messages,
           format: "snapshot-v1",
           metadata: {
-            exportedAt: snapshot.data.exportedAt
+            exportedAt: snapshot.data.exportedAt,
+            ...(model ? { model } : {})
           }
         }
       ];
@@ -601,6 +661,21 @@ export class ConversationDiscoveryService {
       metadata.sessionId = payload.sessionId;
     }
 
+    this.appendMetadataFromKeys(metadata, payload, {
+      model: ["model", "modelName", "engine"],
+      provider: ["provider", "vendor"],
+      workspaceId: ["workspaceId"],
+      projectName: ["projectName", "workspaceName"],
+      originCreatedAt: ["createdAt", "timestamp"]
+    });
+
+    const roleStats = this.collectRoleStats(messageSource);
+    if (Object.keys(roleStats).length > 0) {
+      metadata.roles = Object.entries(roleStats)
+        .map(([role, count]) => `${role}:${count}`)
+        .join(",");
+    }
+
     return {
       conversationKey,
       title: trimTitle(title),
@@ -698,6 +773,193 @@ export class ConversationDiscoveryService {
     }
 
     return undefined;
+  }
+
+  private appendMetadataFromKeys(
+    metadata: Record<string, string>,
+    payload: Record<string, unknown>,
+    keys: Record<string, string[]>
+  ): void {
+    const nestedMetadata = isRecord(payload.metadata) ? payload.metadata : undefined;
+
+    for (const [targetKey, candidateKeys] of Object.entries(keys)) {
+      for (const candidateKey of candidateKeys) {
+        const value =
+          toSafeMetadataValue(payload[candidateKey]) ??
+          (nestedMetadata ? toSafeMetadataValue(nestedMetadata[candidateKey]) : undefined);
+
+        if (!value) {
+          continue;
+        }
+
+        metadata[targetKey] = value;
+        break;
+      }
+    }
+  }
+
+  private collectRoleStats(payload: unknown): Record<string, number> {
+    if (!Array.isArray(payload)) {
+      return {};
+    }
+
+    const counts: Record<string, number> = {};
+
+    for (const item of payload) {
+      if (!isRecord(item)) {
+        continue;
+      }
+
+      const role = toSafeMetadataValue(item.role)?.toLowerCase();
+      if (!role) {
+        continue;
+      }
+
+      counts[role] = (counts[role] ?? 0) + 1;
+    }
+
+    return counts;
+  }
+
+  private inferProjectDetails(options: {
+    ide: SupportedIde;
+    filePath: string;
+    sourceRoot: string;
+    explicitProjectPath?: string;
+    parsedProjectPath?: string;
+    workspaceId?: string;
+  }): ProjectInference {
+    if (options.explicitProjectPath) {
+      const normalized = toAbsoluteNormalized(options.explicitProjectPath);
+      return {
+        projectPath: normalized,
+        confidence: "high",
+        source: "override",
+        group: normalized
+      };
+    }
+
+    if (options.parsedProjectPath) {
+      const normalized = toAbsoluteNormalized(options.parsedProjectPath);
+      return {
+        projectPath: normalized,
+        confidence: "high",
+        source: "metadata",
+        group: normalized
+      };
+    }
+
+    const gitRoot = this.findNearestGitRoot(options.filePath, options.sourceRoot);
+    if (gitRoot) {
+      return {
+        projectPath: gitRoot,
+        confidence: "medium",
+        source: "git-root",
+        group: gitRoot
+      };
+    }
+
+    const markerProjectPath = this.findProjectFromIdeMarker(options.filePath);
+    if (markerProjectPath) {
+      return {
+        projectPath: markerProjectPath,
+        confidence: "low",
+        source: "path-marker",
+        group: markerProjectPath
+      };
+    }
+
+    if (options.workspaceId) {
+      return {
+        confidence: "low",
+        source: "workspace-storage",
+        group: `${options.ide}:workspace:${options.workspaceId}`
+      };
+    }
+
+    const fallbackGroup = path.basename(options.sourceRoot || path.dirname(options.filePath)) || "unknown";
+
+    return {
+      confidence: "low",
+      source: "unknown",
+      group: `${options.ide}:root:${fallbackGroup}`
+    };
+  }
+
+  private findNearestGitRoot(filePath: string, sourceRoot: string): string | undefined {
+    let current = path.dirname(toAbsoluteNormalized(filePath));
+    const floor = sourceRoot ? toAbsoluteNormalized(sourceRoot) : undefined;
+
+    for (let index = 0; index < 12; index += 1) {
+      if (fs.existsSync(path.join(current, ".git"))) {
+        return current;
+      }
+
+      const parent = path.dirname(current);
+      if (parent === current) {
+        break;
+      }
+
+      if (floor && !parent.startsWith(floor)) {
+        break;
+      }
+
+      current = parent;
+    }
+
+    return undefined;
+  }
+
+  private findProjectFromIdeMarker(filePath: string): string | undefined {
+    const normalized = toAbsoluteNormalized(filePath);
+    const segments = normalized.split(path.sep).filter((segment) => segment.length > 0);
+
+    for (let index = 0; index < segments.length; index += 1) {
+      if (!IDE_MARKERS.includes(segments[index]?.toLowerCase() ?? "")) {
+        continue;
+      }
+
+      if (index === 0) {
+        continue;
+      }
+
+      return path.join(...segments.slice(0, index));
+    }
+
+    return undefined;
+  }
+
+  private buildIdeMetadata(options: {
+    ide: SupportedIde;
+    sourceFile: string;
+    sourceRoot: string;
+    workspaceId?: string;
+    conversation: ParsedConversation;
+  }): Record<string, string> {
+    const metadata: Record<string, string> = {
+      ...options.conversation.metadata,
+      sourceRoot: options.sourceRoot,
+      sourceFileExt: path.extname(options.sourceFile).toLowerCase(),
+      sourceFileBase: path.basename(options.sourceFile)
+    };
+
+    if (options.workspaceId) {
+      metadata.workspaceId = options.workspaceId;
+    }
+
+    if (options.ide === "vscode-copilot") {
+      metadata.ideChannel = options.sourceFile.includes("Code - Insiders") ? "insiders" : "stable";
+    }
+
+    if (options.ide === "cursor") {
+      metadata.ideVariant = options.sourceFile.includes("Cursor") ? "desktop" : "unknown";
+    }
+
+    if (options.ide === "antigravity") {
+      metadata.ideVariant = "antigravity";
+    }
+
+    return metadata;
   }
 
   private findSourceRoot(filePath: string, roots: string[]): string {

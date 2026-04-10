@@ -325,6 +325,16 @@ export class SqliteStore {
       params.projectPath = filters.projectPath;
     }
 
+    if (filters.projectConfidence) {
+      clauses.push("metadata_json LIKE @projectConfidenceLike");
+      params.projectConfidenceLike = `%\"projectConfidence\":\"${filters.projectConfidence}\"%`;
+    }
+
+    if (filters.projectSource) {
+      clauses.push("metadata_json LIKE @projectSourceLike");
+      params.projectSourceLike = `%\"projectSource\":\"${filters.projectSource}\"%`;
+    }
+
     const limit = Math.max(1, Math.min(filters.limit ?? 200, 5000));
     params.limit = limit;
 
@@ -510,6 +520,13 @@ export class SqliteStore {
   private toDiscoveredConversationRow(
     conversation: DiscoveredConversation
   ): Record<string, unknown> {
+    const metadata = {
+      ...conversation.metadata,
+      ...(conversation.projectConfidence ? { projectConfidence: conversation.projectConfidence } : {}),
+      ...(conversation.projectSource ? { projectSource: conversation.projectSource } : {}),
+      ...(conversation.projectGroup ? { projectGroup: conversation.projectGroup } : {})
+    };
+
     return {
       id: conversation.id,
       ide: conversation.ide,
@@ -523,13 +540,15 @@ export class SqliteStore {
       size_bytes: conversation.sizeBytes,
       last_modified_at: conversation.lastModifiedAt ?? null,
       scanned_at: conversation.scannedAt,
-      metadata_json: JSON.stringify(conversation.metadata)
+      metadata_json: JSON.stringify(metadata)
     };
   }
 
   private fromDiscoveredConversationRow(
     row: SqliteDiscoveredConversationRow
   ): DiscoveredConversation {
+    const metadata = JSON.parse(row.metadata_json) as Record<string, string>;
+
     return {
       id: row.id,
       ide: row.ide,
@@ -538,12 +557,20 @@ export class SqliteStore {
       conversationKey: row.conversation_key,
       title: row.title,
       projectPath: row.project_path ?? undefined,
+      projectConfidence:
+        metadata.projectConfidence === "high" ||
+        metadata.projectConfidence === "medium" ||
+        metadata.projectConfidence === "low"
+          ? metadata.projectConfidence
+          : undefined,
+      projectSource: metadata.projectSource,
+      projectGroup: metadata.projectGroup,
       messageCount: row.message_count,
       format: row.format,
       sizeBytes: row.size_bytes,
       lastModifiedAt: row.last_modified_at ?? undefined,
       scannedAt: row.scanned_at,
-      metadata: JSON.parse(row.metadata_json) as Record<string, string>
+      metadata
     };
   }
 }

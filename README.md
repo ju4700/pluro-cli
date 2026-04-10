@@ -128,6 +128,14 @@ List discovered conversations for one IDE:
 pluro conversation list --ide cursor --format table
 ```
 
+Filter list output by project confidence and source:
+
+```bash
+pluro conversation list --ide vscode-copilot --project-confidence high --project-source metadata
+```
+
+Both scan and list tables now include project confidence (`high|medium|low`) and fallback project grouping when exact project path cannot be inferred.
+
 Inject one discovered conversation into Pluro store:
 
 ```bash
@@ -331,6 +339,17 @@ Conversation inject picker behavior:
 - If `conversationId` is omitted, Pluro can pick from discovered conversations.
 - Use `--ide`, `--project-filter`, and `--limit` to narrow picker candidates.
 - Use `--select <number>` for non-interactive shells/automation.
+
+Conversation list CI gating flags:
+
+- `--fail-on-low-confidence` exits with code `1` when any listed conversation has `low` confidence.
+- `--fail-on-unresolved-project` exits with code `1` when any listed conversation has no resolved `projectPath`.
+
+Project inference behavior:
+
+- `high`: explicit `--project` override or project/workspace path found in conversation metadata.
+- `medium`: inferred from nearby Git root.
+- `low`: inferred from IDE path markers or workspace-storage fallback grouping.
 
 Status command output formats:
 

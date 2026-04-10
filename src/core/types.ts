@@ -130,6 +130,9 @@ export interface DiscoveredConversation {
   conversationKey: string;
   title: string;
   projectPath?: string;
+  projectConfidence?: "high" | "medium" | "low";
+  projectSource?: string;
+  projectGroup?: string;
   messageCount: number;
   format: string;
   sizeBytes: number;
@@ -141,6 +144,8 @@ export interface DiscoveredConversation {
 export interface ConversationDiscoveryFilters {
   ide?: SupportedIde;
   projectPath?: string;
+  projectConfidence?: "high" | "medium" | "low";
+  projectSource?: string;
   limit?: number;
 }
 
