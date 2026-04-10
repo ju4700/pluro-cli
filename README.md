@@ -134,6 +134,12 @@ Filter list output by project confidence and source:
 pluro conversation list --ide vscode-copilot --project-confidence high --project-source metadata
 ```
 
+Gate CI/scripts by minimum confidence (fails with exit code 1 if any listed conversation is below threshold):
+
+```bash
+pluro conversation list --ide vscode-copilot --min-project-confidence medium --format summary
+```
+
 Both scan and list tables now include project confidence (`high|medium|low`) and fallback project grouping when exact project path cannot be inferred.
 
 Inject one discovered conversation into Pluro store:
@@ -152,6 +158,18 @@ Pick by index in scripts/non-interactive terminals:
 
 ```bash
 pluro conversation inject --ide cursor --select 1 --format summary
+```
+
+Filter picker candidates by confidence and source:
+
+```bash
+pluro conversation inject --ide vscode-copilot --project-confidence high --project-source metadata --select 1
+```
+
+Gate scan results by minimum confidence (fails with exit code 1 if any discovered conversation is below threshold):
+
+```bash
+pluro conversation scan --ide cursor --min-project-confidence medium --format summary
 ```
 
 Inject and immediately export to a target profile adapter (for cross-IDE delivery):
@@ -331,8 +349,13 @@ Daemon connector status endpoint:
 Daemon conversation endpoints:
 
 - `POST /conversations/scan` with body `{ ide, roots?, recursive?, projectPath?, maxFiles?, maxFileSizeBytes?, includeSessionLogs? }`
-- `GET /conversations?ide=cursor|vscode-copilot|antigravity&projectPath=<path>&limit=<n>`
+- `GET /conversations?ide=cursor|vscode-copilot|antigravity&projectPath=<path>&projectConfidence=high|medium|low&projectSource=<source>&minProjectConfidence=high|medium|low&limit=<n>`
 - `POST /conversations/inject` with body `{ conversationId, policy?, skipUnchanged?, scope?, tags?, projectPath? }`
+
+Daemon and MCP conversation list filtering notes:
+
+- `minProjectConfidence` is filter mode (rows below the threshold are excluded).
+- Current parity scope is list-only; scan threshold gating remains a CLI behavior.
 
 Conversation inject picker behavior:
 

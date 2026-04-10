@@ -149,6 +149,37 @@ test("conversation scan derives workspace metadata and fallback group", () => {
   });
 });
 
+test("conversation scan supports min project confidence fail gate", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "vscode-copilot",
+      "--root",
+      scanRoot,
+      "--min-project-confidence",
+      "medium",
+      "--format",
+      "summary"
+    ]);
+
+    assert.equal(scanResult.code, 1);
+    assert.ok(scanResult.stdout.includes("conversation_scan"));
+    assert.ok(scanResult.stdout.includes("projectLow=1"));
+  });
+});
+
 test("conversation scan/list/inject supports idempotent re-import", () => {
   withTempDir((tempDir) => {
     const dataDir = path.join(tempDir, "pluro-data");
@@ -357,6 +388,62 @@ test("conversation inject supports --select when conversationId is omitted", () 
   });
 });
 
+test("conversation inject candidate list supports confidence and source filters", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "vscode-copilot",
+      "--root",
+      scanRoot,
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(scanResult.code, 0, scanResult.stderr);
+
+    const injectResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "inject",
+      "--ide",
+      "vscode-copilot",
+      "--project-confidence",
+      "high",
+      "--project-source",
+      "metadata",
+      "--select",
+      "1",
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(injectResult.code, 0, injectResult.stderr);
+
+    const injectPayload = JSON.parse(injectResult.stdout) as {
+      inject: {
+        skipped: boolean;
+        result?: { imported: number };
+      };
+    };
+
+    assert.equal(injectPayload.inject.skipped, false);
+    assert.ok((injectPayload.inject.result?.imported ?? 0) >= 1);
+  });
+});
+
 test("conversation inject without id in non-interactive mode suggests --select", () => {
   withTempDir((tempDir) => {
     const dataDir = path.join(tempDir, "pluro-data");
@@ -525,5 +612,49 @@ test("conversation list summary includes scoring details and supports low-confid
 
     assert.equal(failResult.code, 1);
     assert.ok(failResult.stdout.includes("conversation_list"));
+  });
+});
+
+test("conversation list supports min project confidence fail gate", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "vscode-copilot",
+      "--root",
+      scanRoot,
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(scanResult.code, 0, scanResult.stderr);
+
+    const listResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "list",
+      "--ide",
+      "vscode-copilot",
+      "--min-project-confidence",
+      "high",
+      "--format",
+      "summary"
+    ]);
+
+    assert.equal(listResult.code, 1);
+    assert.ok(listResult.stdout.includes("conversation_list"));
+    assert.ok(listResult.stdout.includes("projectLow=1"));
   });
 });

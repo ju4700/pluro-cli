@@ -27,12 +27,19 @@ async function closeServer(server: http.Server): Promise<void> {
   });
 }
 
-function writeConversationFixture(rootDir: string): void {
+function writeConversationFixture(
+  rootDir: string,
+  options: {
+    includeProjectPath?: boolean;
+  } = {}
+): void {
   fs.mkdirSync(rootDir, { recursive: true });
 
-  const fixture = {
+  const includeProjectPath = options.includeProjectPath !== false;
+
+  const fixture: Record<string, unknown> = {
     title: "Daemon Conversation Fixture",
-    projectPath: path.join(rootDir, "project-daemon"),
+    ...(includeProjectPath ? { projectPath: path.join(rootDir, "project-daemon") } : {}),
     messages: [
       {
         role: "user",
@@ -146,6 +153,79 @@ test("daemon conversations scan/list/inject workflow", async () => {
 
       assert.equal(secondInjectPayload.inject.skipped, true);
       assert.equal(secondInjectPayload.inject.reason, "unchanged");
+    } finally {
+      await closeServer(server);
+      service.close();
+    }
+  });
+});
+
+test("daemon conversations list supports min project confidence filtering", async () => {
+  await withTempDir(async (dataDir) => {
+    const scanRoot = path.join(dataDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const store = new SqliteStore(path.join(dataDir, "context.db"));
+    const service = new ContextService(
+      store,
+      new EncryptionService({ passphrase: "daemon-convo-test", disableKeychain: true })
+    );
+
+    service.init();
+
+    const server = await startDaemonServer(service, {
+      host: "127.0.0.1",
+      port: 0,
+      dataDir
+    });
+
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const port = (address as AddressInfo).port;
+
+      const scanResponse = await fetch(`http://127.0.0.1:${port}/conversations/scan`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ide: "vscode-copilot",
+          roots: [scanRoot]
+        })
+      });
+
+      assert.equal(scanResponse.status, 200);
+
+      const listAllResponse = await fetch(
+        `http://127.0.0.1:${port}/conversations?ide=vscode-copilot`
+      );
+      assert.equal(listAllResponse.status, 200);
+
+      const listAllPayload = (await listAllResponse.json()) as {
+        total: number;
+      };
+
+      assert.equal(listAllPayload.total, 2);
+
+      const listFilteredResponse = await fetch(
+        `http://127.0.0.1:${port}/conversations?ide=vscode-copilot&minProjectConfidence=high`
+      );
+      assert.equal(listFilteredResponse.status, 200);
+
+      const listFilteredPayload = (await listFilteredResponse.json()) as {
+        minProjectConfidence: string;
+        total: number;
+        conversations: Array<{ projectConfidence?: string }>;
+      };
+
+      assert.equal(listFilteredPayload.minProjectConfidence, "high");
+      assert.equal(listFilteredPayload.total, 1);
+      assert.equal(listFilteredPayload.conversations[0]?.projectConfidence, "high");
     } finally {
       await closeServer(server);
       service.close();

@@ -70,6 +70,7 @@ const conversationListArgsSchema = z.object({
   projectPath: z.string().optional(),
   projectConfidence: z.enum(["high", "medium", "low"]).optional(),
   projectSource: z.string().optional(),
+  minProjectConfidence: z.enum(["high", "medium", "low"]).optional(),
   limit: z.number().int().min(1).max(5000).optional()
 });
 
@@ -244,6 +245,7 @@ const TOOL_DEFINITIONS: Tool[] = [
         projectPath: { type: "string" },
         projectConfidence: { type: "string", enum: ["high", "medium", "low"] },
         projectSource: { type: "string" },
+        minProjectConfidence: { type: "string", enum: ["high", "medium", "low"] },
         limit: { type: "number" }
       }
     }
@@ -355,6 +357,7 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
           projectPath: payload.projectPath,
           projectConfidence: payload.projectConfidence,
           projectSource: payload.projectSource,
+          minProjectConfidence: payload.minProjectConfidence,
           limit: payload.limit ?? 200
         });
         return toToolResult({
@@ -362,6 +365,7 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
           projectPath: payload.projectPath,
           projectConfidence: payload.projectConfidence ?? "all",
           projectSource: payload.projectSource ?? "all",
+          minProjectConfidence: payload.minProjectConfidence ?? "all",
           conversations,
           total: conversations.length
         });

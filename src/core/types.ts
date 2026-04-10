@@ -146,6 +146,7 @@ export interface ConversationDiscoveryFilters {
   projectPath?: string;
   projectConfidence?: "high" | "medium" | "low";
   projectSource?: string;
+  minProjectConfidence?: "high" | "medium" | "low";
   limit?: number;
 }
 

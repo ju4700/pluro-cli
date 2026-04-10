@@ -230,6 +230,9 @@ export async function startDaemonServer(
         const projectPath = url.searchParams.get("projectPath") ?? undefined;
         const projectConfidence = parseProjectConfidence(url.searchParams.get("projectConfidence"));
         const projectSource = url.searchParams.get("projectSource") ?? undefined;
+        const minProjectConfidence = parseProjectConfidence(
+          url.searchParams.get("minProjectConfidence")
+        );
         const limit = parseOptionalInt(url.searchParams.get("limit")) ?? 200;
 
         const discovery = new ConversationDiscoveryService(service);
@@ -238,6 +241,7 @@ export async function startDaemonServer(
           projectPath,
           projectConfidence,
           projectSource,
+          minProjectConfidence,
           limit
         });
 
@@ -247,6 +251,7 @@ export async function startDaemonServer(
           projectPath,
           projectConfidence: projectConfidence ?? "all",
           projectSource: projectSource ?? "all",
+          minProjectConfidence: minProjectConfidence ?? "all",
           total: conversations.length,
           conversations
         });

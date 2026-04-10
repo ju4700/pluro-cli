@@ -330,6 +330,13 @@ export class SqliteStore {
       params.projectConfidenceLike = `%\"projectConfidence\":\"${filters.projectConfidence}\"%`;
     }
 
+    if (filters.minProjectConfidence) {
+      const confidenceClause = this.toMinProjectConfidenceClause(filters.minProjectConfidence);
+      if (confidenceClause) {
+        clauses.push(confidenceClause);
+      }
+    }
+
     if (filters.projectSource) {
       clauses.push("metadata_json LIKE @projectSourceLike");
       params.projectSourceLike = `%\"projectSource\":\"${filters.projectSource}\"%`;
@@ -348,6 +355,20 @@ export class SqliteStore {
     const statement = this.db.prepare(query);
     const rows = statement.all(params) as SqliteDiscoveredConversationRow[];
     return rows.map((row) => this.fromDiscoveredConversationRow(row));
+  }
+
+  private toMinProjectConfidenceClause(
+    minProjectConfidence: "high" | "medium" | "low"
+  ): string | null {
+    if (minProjectConfidence === "low") {
+      return null;
+    }
+
+    if (minProjectConfidence === "medium") {
+      return "(metadata_json LIKE '%\"projectConfidence\":\"high\"%' OR metadata_json LIKE '%\"projectConfidence\":\"medium\"%')";
+    }
+
+    return "metadata_json LIKE '%\"projectConfidence\":\"high\"%'";
   }
 
   getDiscoveredConversation(id: string): DiscoveredConversation | null {

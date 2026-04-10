@@ -186,6 +186,7 @@ interface ConversationScanCliOptions {
   root?: string[];
   recursive?: boolean;
   project?: string;
+  minProjectConfidence?: string;
   maxFiles: string;
   maxFileSizeMb: string;
   includeSessionLogs?: boolean;
@@ -199,6 +200,7 @@ interface ConversationListCliOptions {
   project?: string;
   projectConfidence?: string;
   projectSource?: string;
+  minProjectConfidence?: string;
   limit: string;
   format: string;
   failOnLowConfidence?: boolean;
@@ -212,6 +214,8 @@ interface ConversationInjectCliOptions {
   project?: string;
   ide?: string;
   projectFilter?: string;
+  projectConfidence?: string;
+  projectSource?: string;
   limit?: string;
   select?: string;
   tag?: string[];
@@ -364,6 +368,46 @@ function parseProjectConfidence(value: string): "high" | "medium" | "low" {
   }
 
   throw new Error(`Invalid project confidence: ${value}. Expected high, medium, or low.`);
+}
+
+function projectConfidenceThresholdRank(value: "high" | "medium" | "low"): number {
+  if (value === "high") {
+    return 3;
+  }
+
+  if (value === "medium") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function normalizeConversationProjectConfidence(value?: string): "high" | "medium" | "low" {
+  if (value === "high" || value === "medium" || value === "low") {
+    return value;
+  }
+
+  return "low";
+}
+
+function parseProjectConfidenceThreshold(value?: string): "high" | "medium" | "low" | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return parseProjectConfidence(value);
+}
+
+function hasConversationBelowProjectConfidence(
+  conversations: DiscoveredConversation[],
+  threshold: "high" | "medium" | "low"
+): boolean {
+  const thresholdRank = projectConfidenceThresholdRank(threshold);
+
+  return conversations.some((conversation) => {
+    const confidence = normalizeConversationProjectConfidence(conversation.projectConfidence);
+    return projectConfidenceThresholdRank(confidence) < thresholdRank;
+  });
 }
 
 function toOverallHealth(summary: ConnectorStatusSummary): "healthy" | "warning" | "error" {
@@ -578,8 +622,15 @@ function formatProjectSourceBreakdown(bySource: Map<string, number>): string {
 
 function applyConversationListFailurePolicy(
   conversations: DiscoveredConversation[],
-  options: Pick<ConversationListCliOptions, "failOnLowConfidence" | "failOnUnresolvedProject">
+  options: Pick<ConversationListCliOptions, "failOnLowConfidence" | "failOnUnresolvedProject" | "minProjectConfidence">
 ): void {
+  const minProjectConfidence = parseProjectConfidenceThreshold(options.minProjectConfidence);
+
+  if (minProjectConfidence && hasConversationBelowProjectConfidence(conversations, minProjectConfidence)) {
+    process.exitCode = 1;
+    return;
+  }
+
   if (options.failOnLowConfidence && conversations.some((conversation) => conversation.projectConfidence === "low")) {
     process.exitCode = 1;
     return;
@@ -746,8 +797,15 @@ function formatConversationInjectSummary(payload: {
 
 function applyConversationScanFailurePolicy(
   payload: ConversationScanResult,
-  options: Pick<ConversationScanCliOptions, "failOnError" | "failOnWarning">
+  options: Pick<ConversationScanCliOptions, "failOnError" | "failOnWarning" | "minProjectConfidence">
 ): void {
+  const minProjectConfidence = parseProjectConfidenceThreshold(options.minProjectConfidence);
+
+  if (minProjectConfidence && hasConversationBelowProjectConfidence(payload.conversations, minProjectConfidence)) {
+    process.exitCode = 1;
+    return;
+  }
+
   if (options.failOnError && payload.errors.length > 0) {
     process.exitCode = 1;
     return;
@@ -1349,6 +1407,10 @@ conversationCommand
   .option("--root <path...>", "Optional explicit scan roots")
   .option("--no-recursive", "Disable recursive scanning")
   .option("--project <path>", "Override project path for discovered conversations")
+  .option(
+    "--min-project-confidence <level>",
+    "Exit with code 1 when any discovered conversation falls below confidence: high, medium, or low"
+  )
   .option("--max-files <number>", "Maximum files to scan", "5000")
   .option("--max-file-size-mb <number>", "Maximum candidate file size in MB", "10")
   .option("--no-include-session-logs", "Ignore .jsonl and .log files")
@@ -1392,6 +1454,10 @@ conversationCommand
   .option("--project <path>", "Filter by detected project path")
   .option("--project-confidence <level>", "Filter by project confidence: high, medium, or low")
   .option("--project-source <source>", "Filter by project source, e.g. metadata, git-root")
+  .option(
+    "--min-project-confidence <level>",
+    "Exit with code 1 when any listed conversation falls below confidence: high, medium, or low"
+  )
   .option("--limit <number>", "Maximum rows to return", "200")
   .option("--format <format>", "json, table, or summary", "json")
   .option("--fail-on-low-confidence", "Exit with code 1 when any listed conversation has low confidence", false)
@@ -1450,6 +1516,11 @@ conversationCommand
   .option("--project <path>", "Override project path metadata")
   .option("--ide <ide>", "Filter candidates by IDE when conversationId is omitted")
   .option("--project-filter <path>", "Filter candidates by project path when conversationId is omitted")
+  .option(
+    "--project-confidence <level>",
+    "Filter candidates by project confidence when conversationId is omitted: high, medium, or low"
+  )
+  .option("--project-source <source>", "Filter candidates by project source when conversationId is omitted")
   .option("--limit <number>", "Limit candidate rows when conversationId is omitted", "50")
   .option("--select <number>", "Choose candidate index (1-based) when conversationId is omitted")
   .option("--tag <tag...>", "Additional tags for imported entries")
@@ -1476,9 +1547,14 @@ conversationCommand
         if (!resolvedConversationId) {
           const limit = parseIntValue(String(options.limit ?? "50"), 50);
           const ideFilter = options.ide ? parseSupportedIde(options.ide) : undefined;
+          const projectConfidence = options.projectConfidence
+            ? parseProjectConfidence(options.projectConfidence)
+            : undefined;
           const candidates = discovery.list({
             ide: ideFilter,
             projectPath: options.projectFilter,
+            projectConfidence,
+            projectSource: options.projectSource,
             limit
           });
 
