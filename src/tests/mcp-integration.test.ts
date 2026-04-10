@@ -41,6 +41,33 @@ function withTempDir(handler: (tempDir: string) => Promise<void> | void): Promis
     });
 }
 
+function writeConversationFixture(
+  rootDir: string,
+  options: {
+    includeProjectPath?: boolean;
+  } = {}
+): void {
+  fs.mkdirSync(rootDir, { recursive: true });
+
+  const includeProjectPath = options.includeProjectPath !== false;
+  const fixture: Record<string, unknown> = {
+    title: "MCP Conversation Fixture",
+    ...(includeProjectPath ? { projectPath: path.join(rootDir, "project-mcp") } : {}),
+    messages: [
+      {
+        role: "user",
+        content: "show me mcp scan"
+      },
+      {
+        role: "assistant",
+        content: "mcp scan result ready"
+      }
+    ]
+  };
+
+  fs.writeFileSync(path.join(rootDir, "mcp-conversation.json"), `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
+}
+
 function startMcpProcess(dataDir: string): ChildProcessWithoutNullStreams {
   const cliPath = path.join(process.cwd(), "dist", "cli", "index.js");
   return spawn(process.execPath, [cliPath, "--data-dir", dataDir, "daemon", "mcp"], {
@@ -262,6 +289,69 @@ test("MCP stdio supports initialize, tools/list, and tools/call", async () => {
           (entry) => entry.sourceTool === "mcp-test"
         )
       );
+    } finally {
+      await rpc.stop();
+    }
+  });
+});
+
+test("MCP conversation scan supports min project confidence response filtering", async () => {
+  await withTempDir(async (dataDir) => {
+    const scanRoot = path.join(dataDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const proc = startMcpProcess(dataDir);
+    const rpc = createRpcClient(proc);
+
+    try {
+      await rpc.request("initialize", {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: {
+          name: "pluro-test-client",
+          version: "0.0.1"
+        }
+      });
+
+      rpc.notify("notifications/initialized");
+
+      const scanResult = await rpc.request<{
+        structuredContent?: {
+          minProjectConfidence?: string;
+          indexedDiscovered?: number;
+          discovered?: number;
+          conversations?: Array<{ projectConfidence?: string }>;
+        };
+      }>("tools/call", {
+        name: "pluro_conversation_scan",
+        arguments: {
+          ide: "vscode-copilot",
+          roots: [scanRoot],
+          minProjectConfidence: "high"
+        }
+      });
+
+      assert.equal(scanResult.structuredContent?.minProjectConfidence, "high");
+      assert.equal(scanResult.structuredContent?.indexedDiscovered, 2);
+      assert.equal(scanResult.structuredContent?.discovered, 1);
+      assert.equal(scanResult.structuredContent?.conversations?.[0]?.projectConfidence, "high");
+
+      const listResult = await rpc.request<{
+        structuredContent?: {
+          total?: number;
+        };
+      }>("tools/call", {
+        name: "pluro_conversation_list",
+        arguments: {
+          ide: "vscode-copilot"
+        }
+      });
+
+      assert.equal(listResult.structuredContent?.total, 2);
     } finally {
       await rpc.stop();
     }

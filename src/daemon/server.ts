@@ -13,6 +13,7 @@ import { ContextService } from "../core/context-service";
 import { ConversationDiscoveryService } from "../core/conversation-discovery";
 import type {
   CreateContextInput,
+  DiscoveredConversation,
   SearchContextFilters,
   SupportedIde,
   UpdateContextInput
@@ -127,6 +128,33 @@ function parseProjectConfidence(value: string | null): "high" | "medium" | "low"
   }
 
   throw new Error(`Invalid projectConfidence: ${value}. Expected high, medium, or low.`);
+}
+
+function toProjectConfidenceRank(value: "high" | "medium" | "low" | undefined): number {
+  if (value === "high") {
+    return 3;
+  }
+
+  if (value === "medium") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function filterDiscoveredConversationsByMinProjectConfidence(
+  conversations: DiscoveredConversation[],
+  minProjectConfidence: "high" | "medium" | "low" | undefined
+): DiscoveredConversation[] {
+  if (!minProjectConfidence || minProjectConfidence === "low") {
+    return conversations;
+  }
+
+  const threshold = toProjectConfidenceRank(minProjectConfidence);
+
+  return conversations.filter(
+    (conversation) => toProjectConfidenceRank(conversation.projectConfidence) >= threshold
+  );
 }
 
 export async function startDaemonServer(
@@ -264,6 +292,7 @@ export async function startDaemonServer(
           roots?: string[];
           recursive?: boolean;
           projectPath?: string;
+          minProjectConfidence?: string;
           maxFiles?: number;
           maxFileSizeBytes?: number;
           includeSessionLogs?: boolean;
@@ -275,6 +304,7 @@ export async function startDaemonServer(
         }
 
         const discovery = new ConversationDiscoveryService(service);
+        const minProjectConfidence = parseProjectConfidence(body.minProjectConfidence ?? null);
         const result = await discovery.scan({
           ide: parseSupportedIde(body.ide),
           roots: Array.isArray(body.roots)
@@ -286,6 +316,23 @@ export async function startDaemonServer(
           maxFileSizeBytes: body.maxFileSizeBytes,
           includeSessionLogs: body.includeSessionLogs !== false
         });
+
+        const filteredConversations = filterDiscoveredConversationsByMinProjectConfidence(
+          result.conversations,
+          minProjectConfidence
+        );
+
+        if (minProjectConfidence) {
+          sendJson(res, 200, {
+            ok: true,
+            ...result,
+            minProjectConfidence,
+            indexedDiscovered: result.discovered,
+            discovered: filteredConversations.length,
+            conversations: filteredConversations
+          });
+          return;
+        }
 
         sendJson(res, 200, { ok: true, ...result });
         return;

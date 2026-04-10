@@ -10,6 +10,7 @@ import { z } from "zod";
 import type { ConflictPolicy } from "../core/conflict-resolution";
 import { ContextService } from "../core/context-service";
 import { ConversationDiscoveryService } from "../core/conversation-discovery";
+import type { DiscoveredConversation } from "../core/types";
 import { getPluroVersion } from "../core/version";
 
 const addContextArgsSchema = z.object({
@@ -60,6 +61,7 @@ const conversationScanArgsSchema = z.object({
   roots: z.array(z.string()).optional(),
   recursive: z.boolean().optional(),
   projectPath: z.string().optional(),
+  minProjectConfidence: z.enum(["high", "medium", "low"]).optional(),
   maxFiles: z.number().int().min(1).max(20000).optional(),
   maxFileSizeBytes: z.number().int().min(1024).optional(),
   includeSessionLogs: z.boolean().optional()
@@ -115,6 +117,33 @@ function normalizeUnknownObject(value: unknown): Record<string, unknown> {
   }
 
   return value as Record<string, unknown>;
+}
+
+function toProjectConfidenceRank(value: "high" | "medium" | "low" | undefined): number {
+  if (value === "high") {
+    return 3;
+  }
+
+  if (value === "medium") {
+    return 2;
+  }
+
+  return 1;
+}
+
+function filterDiscoveredConversationsByMinProjectConfidence(
+  conversations: DiscoveredConversation[],
+  minProjectConfidence: "high" | "medium" | "low" | undefined
+): DiscoveredConversation[] {
+  if (!minProjectConfidence || minProjectConfidence === "low") {
+    return conversations;
+  }
+
+  const threshold = toProjectConfidenceRank(minProjectConfidence);
+
+  return conversations.filter(
+    (conversation) => toProjectConfidenceRank(conversation.projectConfidence) >= threshold
+  );
 }
 
 const TOOL_DEFINITIONS: Tool[] = [
@@ -228,6 +257,7 @@ const TOOL_DEFINITIONS: Tool[] = [
         },
         recursive: { type: "boolean" },
         projectPath: { type: "string" },
+        minProjectConfidence: { type: "string", enum: ["high", "medium", "low"] },
         maxFiles: { type: "number" },
         maxFileSizeBytes: { type: "number" },
         includeSessionLogs: { type: "boolean" }
@@ -345,7 +375,31 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
       if (toolName === "pluro_conversation_scan") {
         const payload = conversationScanArgsSchema.parse(args);
         const discovery = new ConversationDiscoveryService(service);
-        const result = await discovery.scan(payload);
+        const result = await discovery.scan({
+          ide: payload.ide,
+          roots: payload.roots,
+          recursive: payload.recursive,
+          projectPath: payload.projectPath,
+          maxFiles: payload.maxFiles,
+          maxFileSizeBytes: payload.maxFileSizeBytes,
+          includeSessionLogs: payload.includeSessionLogs
+        });
+
+        const filteredConversations = filterDiscoveredConversationsByMinProjectConfidence(
+          result.conversations,
+          payload.minProjectConfidence
+        );
+
+        if (payload.minProjectConfidence) {
+          return toToolResult({
+            ...result,
+            minProjectConfidence: payload.minProjectConfidence,
+            indexedDiscovered: result.discovered,
+            discovered: filteredConversations.length,
+            conversations: filteredConversations
+          });
+        }
+
         return toToolResult(result);
       }
 

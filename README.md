@@ -348,14 +348,14 @@ Daemon connector status endpoint:
 
 Daemon conversation endpoints:
 
-- `POST /conversations/scan` with body `{ ide, roots?, recursive?, projectPath?, maxFiles?, maxFileSizeBytes?, includeSessionLogs? }`
+- `POST /conversations/scan` with body `{ ide, roots?, recursive?, projectPath?, minProjectConfidence?, maxFiles?, maxFileSizeBytes?, includeSessionLogs? }`
 - `GET /conversations?ide=cursor|vscode-copilot|antigravity&projectPath=<path>&projectConfidence=high|medium|low&projectSource=<source>&minProjectConfidence=high|medium|low&limit=<n>`
 - `POST /conversations/inject` with body `{ conversationId, policy?, skipUnchanged?, scope?, tags?, projectPath? }`
 
-Daemon and MCP conversation list filtering notes:
+Daemon and MCP conversation confidence filtering notes:
 
 - `minProjectConfidence` is filter mode (rows below the threshold are excluded).
-- Current parity scope is list-only; scan threshold gating remains a CLI behavior.
+- For scan operations, `minProjectConfidence` filters response rows and `discovered` count while `indexedDiscovered` keeps the full indexed total.
 
 Conversation inject picker behavior:
 

@@ -232,3 +232,75 @@ test("daemon conversations list supports min project confidence filtering", asyn
     }
   });
 });
+
+test("daemon conversations scan supports min project confidence response filtering", async () => {
+  await withTempDir(async (dataDir) => {
+    const scanRoot = path.join(dataDir, "Code");
+    const highRoot = path.join(scanRoot, "project-high");
+    const lowRoot = path.join(scanRoot, "User", "workspaceStorage", "workspace-123");
+
+    writeConversationFixture(highRoot);
+    writeConversationFixture(lowRoot, { includeProjectPath: false });
+
+    const store = new SqliteStore(path.join(dataDir, "context.db"));
+    const service = new ContextService(
+      store,
+      new EncryptionService({ passphrase: "daemon-convo-test", disableKeychain: true })
+    );
+
+    service.init();
+
+    const server = await startDaemonServer(service, {
+      host: "127.0.0.1",
+      port: 0,
+      dataDir
+    });
+
+    try {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const port = (address as AddressInfo).port;
+
+      const scanResponse = await fetch(`http://127.0.0.1:${port}/conversations/scan`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          ide: "vscode-copilot",
+          roots: [scanRoot],
+          minProjectConfidence: "high"
+        })
+      });
+
+      assert.equal(scanResponse.status, 200);
+
+      const scanPayload = (await scanResponse.json()) as {
+        minProjectConfidence: string;
+        indexedDiscovered: number;
+        discovered: number;
+        conversations: Array<{ projectConfidence?: string }>;
+      };
+
+      assert.equal(scanPayload.minProjectConfidence, "high");
+      assert.equal(scanPayload.indexedDiscovered, 2);
+      assert.equal(scanPayload.discovered, 1);
+      assert.equal(scanPayload.conversations[0]?.projectConfidence, "high");
+
+      const listAllResponse = await fetch(
+        `http://127.0.0.1:${port}/conversations?ide=vscode-copilot`
+      );
+
+      assert.equal(listAllResponse.status, 200);
+
+      const listAllPayload = (await listAllResponse.json()) as {
+        total: number;
+      };
+
+      assert.equal(listAllPayload.total, 2);
+    } finally {
+      await closeServer(server);
+      service.close();
+    }
+  });
+});
