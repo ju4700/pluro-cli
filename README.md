@@ -32,6 +32,20 @@ This repository now includes the first working implementation:
 
 ## Install
 
+Global install from npm:
+
+```bash
+npm install -g pluro-cli
+```
+
+Run without global install:
+
+```bash
+npx pluro-cli --help
+```
+
+Local development setup:
+
 ```bash
 npm install
 npm run build
@@ -43,6 +57,8 @@ After linking, use:
 ```bash
 pluro --help
 ```
+
+The package exposes both `pluro` and `pluro-cli` command names.
 
 ## Quick Start
 

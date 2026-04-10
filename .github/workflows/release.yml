@@ -74,6 +74,9 @@ jobs:
       - name: Verify Release Tag
         run: npm run verify:release-tag -- "${{ steps.tag.outputs.tag }}"
 
+      - name: Verify Package Contents
+        run: npm run verify:package
+
       - name: Publish Package
         run: npm publish --access public
 

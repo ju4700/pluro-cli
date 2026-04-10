@@ -4,7 +4,8 @@
   "description": "Local-first shared context CLI for agentic tools",
   "main": "dist/index.js",
   "bin": {
-    "pluro": "dist/cli/index.js"
+    "pluro": "dist/cli/index.js",
+    "pluro-cli": "dist/cli/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -13,8 +14,9 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test \"dist/tests/*.test.js\"",
     "verify:mcp": "npm run build && node scripts/mcp-conformance-check.cjs",
-    "verify:ci": "npm run typecheck && npm test && npm run verify:mcp",
+    "verify:ci": "npm run typecheck && npm test && npm run verify:mcp && npm run verify:package",
     "verify:release-tag": "node scripts/verify-release-tag.cjs",
+    "verify:package": "node scripts/verify-package.cjs",
     "release:check": "npm run verify:ci && npm run verify:release-tag"
   },
   "keywords": [
@@ -27,7 +29,8 @@
   "license": "MIT",
   "type": "commonjs",
   "files": [
-    "dist"
+    "dist/**/*",
+    "!dist/tests/**"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
