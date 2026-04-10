@@ -4,6 +4,8 @@ import { Box, Text, useApp, useInput } from "ink";
 import type { ContextService } from "../core/context-service";
 import type { ConversationDiscoveryService } from "../core/conversation-discovery";
 import type { ContextEntry, ContextScope, DiscoveredConversation, SupportedIde } from "../core/types";
+import { RetroPanel, getTerminalColumns, horizontalRule } from "./components";
+import { TUI_THEME, getNoticeColor, type NoticeTone } from "./theme";
 
 type TabId = "dashboard" | "conversations" | "contexts";
 type IdeFilter = "all" | SupportedIde;
@@ -14,7 +16,7 @@ type InjectScope = "global" | "project" | "session";
 type ConversationInputMode = "none" | "project-query" | "source-query" | "inject-tags";
 
 interface ScreenNotice {
-  tone: "info" | "success" | "error";
+  tone: NoticeTone;
   message: string;
 }
 
@@ -79,18 +81,6 @@ function clampIndex(value: number, size: number): number {
   }
 
   return Math.max(0, Math.min(value, size - 1));
-}
-
-function getNoticeColor(tone: ScreenNotice["tone"]): "blue" | "green" | "red" {
-  if (tone === "success") {
-    return "green";
-  }
-
-  if (tone === "error") {
-    return "red";
-  }
-
-  return "blue";
 }
 
 function toSelectedWindow<T>(rows: T[], selectedIndex: number, windowSize: number): {
@@ -166,17 +156,17 @@ export function PluroTuiApp(props: PluroTuiAppProps): React.ReactElement {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} paddingY={0}>
-      <Text color="cyan">Pluro Terminal UI v{props.version}</Text>
-      <Text color="gray">Data: {props.dataDir}</Text>
+    <Box flexDirection="column" borderStyle="round" borderColor={TUI_THEME.frame} paddingX={1} paddingY={0}>
+      <Text color={TUI_THEME.frame}>{horizontalRule(8)} Pluro Terminal UI v{props.version} {horizontalRule(8)}</Text>
+      <Text color={TUI_THEME.subtle}>data: {props.dataDir}</Text>
       <Box marginTop={1}>
         {TABS.map((tab, index) => {
           const selected = tab.id === activeTab;
-          const label = `${index + 1}:${tab.label}`;
+          const label = `${index + 1} ${tab.label}`;
 
           return (
             <Box key={tab.id} marginRight={2}>
-              <Text color={selected ? "green" : "gray"}>{selected ? `[${label}]` : label}</Text>
+              <Text color={selected ? TUI_THEME.selected : TUI_THEME.subtle}>{selected ? `[${label}]` : label}</Text>
             </Box>
           );
         })}
@@ -201,9 +191,8 @@ export function PluroTuiApp(props: PluroTuiAppProps): React.ReactElement {
         ) : null}
       </Box>
 
-      <Box marginTop={1}>
-        <Text color="gray">Global keys: Tab/Shift+Tab switch panels | 1/2/3 jump | q quit</Text>
-      </Box>
+      <Text color={TUI_THEME.subtle}>{horizontalRule(80)}</Text>
+      <Text color={TUI_THEME.subtle}>Global keys: Tab/Shift+Tab switch panels | 1/2/3 jump | q quit</Text>
     </Box>
   );
 }
@@ -309,19 +298,60 @@ function DashboardScreen(props: {
     { isActive: props.isActive }
   );
 
+  const activityItems = [
+    `${summary.recentContextCount} recent context entr${summary.recentContextCount === 1 ? "y" : "ies"}`,
+    `${summary.discoveredCount} indexed conversation${summary.discoveredCount === 1 ? "" : "s"}`,
+    `confidence: high=${summary.confidence.high}, medium=${summary.confidence.medium}, low=${summary.confidence.low}`,
+    `last scan: ${shortTimestamp(summary.lastScannedAt)}`
+  ];
+
+  const spotlightItems = [
+    "Conversations: press s to scan and Enter to inject",
+    "Use / and f for project/source text filtering",
+    "Contexts: press g to cycle scope, d to delete selected",
+    "Press r on any panel to refresh live data"
+  ];
+
+  const splitLayout = getTerminalColumns() >= 108;
+
   return (
     <Box flexDirection="column">
-      <Text color="yellow">Conversation workflow is primary: scan, filter, and inject from the Conversations panel.</Text>
-      <Text>Recent contexts cached: {summary.recentContextCount}</Text>
-      <Text>
-        Discovered conversations: {summary.discoveredCount} (cursor:{summary.byIde.cursor}, vscode:{summary.byIde["vscode-copilot"]}, antigravity:{summary.byIde.antigravity})
-      </Text>
-      <Text>
-        Confidence distribution: high={summary.confidence.high} medium={summary.confidence.medium} low={summary.confidence.low}
-      </Text>
-      <Text>Last scan timestamp: {shortTimestamp(summary.lastScannedAt)}</Text>
+      <RetroPanel title="Dashboard" marginTop={0} borderColor={TUI_THEME.panel}>
+        <Box flexDirection={splitLayout ? "row" : "column"}>
+          <Box flexDirection="column" width={splitLayout ? 44 : undefined} marginRight={splitLayout ? 1 : 0}>
+            <RetroPanel title="Welcome" borderColor={TUI_THEME.panelMuted} marginTop={0}>
+              <Text>Welcome back.</Text>
+              <Text color={TUI_THEME.panel}>      .-""-.</Text>
+              <Text color={TUI_THEME.panel}>     / .--. \\</Text>
+              <Text color={TUI_THEME.panel}>    / /    \\ \\</Text>
+              <Text color={TUI_THEME.panel}>    | |    | |</Text>
+              <Text color={TUI_THEME.panel}>    \\ \\    / /</Text>
+              <Text color={TUI_THEME.panel}>     `"--"`</Text>
+              <Box marginTop={1} flexDirection="column">
+                <Text color={TUI_THEME.subtle}>By IDE:</Text>
+                <Text color={TUI_THEME.subtle}>cursor={summary.byIde.cursor} vscode={summary.byIde["vscode-copilot"]} antigravity={summary.byIde.antigravity}</Text>
+              </Box>
+            </RetroPanel>
+          </Box>
+
+          <Box flexDirection="column" flexGrow={1}>
+            <RetroPanel title="Recent Activity" borderColor={TUI_THEME.panelMuted} marginTop={0}>
+              {activityItems.map((item) => (
+                <Text key={item}>{item}</Text>
+              ))}
+            </RetroPanel>
+          </Box>
+        </Box>
+
+        <RetroPanel title="What's Next" borderColor={TUI_THEME.panelMuted}>
+          {spotlightItems.map((item) => (
+            <Text key={item}>{item}</Text>
+          ))}
+        </RetroPanel>
+      </RetroPanel>
+
       <Box marginTop={1}>
-        <Text color="gray">Panel keys: r refresh | 2 conversations | 3 contexts</Text>
+        <Text color={TUI_THEME.subtle}>Panel keys: r refresh | 2 conversations | 3 contexts</Text>
       </Box>
       <Box marginTop={1}>
         <Text color={getNoticeColor(notice.tone)}>{busy ? "Working..." : notice.message}</Text>
@@ -704,41 +734,42 @@ function ConversationsScreen(props: {
 
   return (
     <Box flexDirection="column">
-      <Text>
-        Filters: ide={ideFilter} confidence={confidenceFilter} source={sourceFilter} projectQuery={projectQuery || "-"} sourceQuery={sourceQuery || "-"} | scanTarget={ideFilter === "all" ? scanIde : ideFilter}
-      </Text>
-      <Text color="gray">Keys: s scan | i ide | c confidence | o source | / project-query | f source-query | e clear-query | r refresh | up/down select | Enter inject-modal</Text>
+      <RetroPanel title="Conversation Controls" marginTop={0} borderColor={TUI_THEME.panelMuted}>
+        <Text>
+          Filters: ide={ideFilter} confidence={confidenceFilter} source={sourceFilter} projectQuery={projectQuery || "-"} sourceQuery={sourceQuery || "-"} | scanTarget={ideFilter === "all" ? scanIde : ideFilter}
+        </Text>
+        <Text color={TUI_THEME.subtle}>Keys: s scan | i ide | c confidence | o source | / project-query | f source-query | e clear-query | r refresh | up/down select | Enter inject-modal</Text>
 
-      {inputMode !== "none" ? (
-        <Box marginTop={1}>
-          <Text color="yellow">
-            {inputMode === "project-query" ? "project query" : inputMode === "source-query" ? "source query" : "inject tags"}
-            {": "}
-            {inputMode === "project-query"
-              ? projectQueryDraft
-              : inputMode === "source-query"
-                ? sourceQueryDraft
-                : injectTagsDraft}
-            <Text color="gray"> (Enter apply, Esc cancel)</Text>
-          </Text>
-        </Box>
-      ) : null}
+        {inputMode !== "none" ? (
+          <Box marginTop={1}>
+            <Text color={TUI_THEME.warning}>
+              {inputMode === "project-query" ? "project query" : inputMode === "source-query" ? "source query" : "inject tags"}
+              {": "}
+              {inputMode === "project-query"
+                ? projectQueryDraft
+                : inputMode === "source-query"
+                  ? sourceQueryDraft
+                  : injectTagsDraft}
+              <Text color={TUI_THEME.subtle}> (Enter apply, Esc cancel)</Text>
+            </Text>
+          </Box>
+        ) : null}
+      </RetroPanel>
 
       {showInjectModal ? (
-        <Box flexDirection="column" marginTop={1} borderStyle="single" borderColor="magenta" paddingX={1}>
-          <Text color="magenta">Inject Options</Text>
+        <RetroPanel title="Inject Options" borderColor={TUI_THEME.panel}>
           <Text>policy={injectPolicy} scope={injectScope} skipUnchanged={injectSkipUnchanged ? "yes" : "no"}</Text>
           <Text>tags={injectTags.length > 0 ? injectTags.join(",") : "none"}</Text>
-          <Text color="gray">Modal keys: p policy | g scope | u toggle-skip | t edit-tags | Enter confirm | Esc cancel</Text>
-        </Box>
+          <Text color={TUI_THEME.subtle}>Modal keys: p policy | g scope | u toggle-skip | t edit-tags | Enter confirm | Esc cancel</Text>
+        </RetroPanel>
       ) : null}
 
-      <Box marginTop={1} flexDirection="column">
+      <RetroPanel title="Indexed Conversations" borderColor={TUI_THEME.panelMuted}>
         <Text>{[padCell("IDE", 14), padCell("PROJECT", 26), padCell("CONF", 6), "TITLE"].join(" ")}</Text>
-        <Text color="gray">{["-".repeat(14), "-".repeat(26), "-".repeat(6), "-".repeat(40)].join(" ")}</Text>
+        <Text color={TUI_THEME.subtle}>{["-".repeat(14), "-".repeat(26), "-".repeat(6), "-".repeat(40)].join(" ")}</Text>
 
         {rowWindow.view.length === 0 ? (
-          <Text color="yellow">No discovered conversations. Press s to scan a local IDE root.</Text>
+          <Text color={TUI_THEME.warning}>No discovered conversations. Press s to scan a local IDE root.</Text>
         ) : (
           rowWindow.view.map((conversation, offset) => {
             const absoluteIndex = rowWindow.start + offset;
@@ -747,22 +778,22 @@ function ConversationsScreen(props: {
             const confidence = conversation.projectConfidence ?? "low";
 
             return (
-              <Text key={conversation.id} color={selected ? "green" : undefined}>
+              <Text key={conversation.id} color={selected ? TUI_THEME.selected : undefined}>
                 {selected ? ">" : " "} {padCell(conversation.ide, 14)} {padCell(project, 26)} {padCell(confidence, 6)} {truncateCell(conversation.title, 40)}
               </Text>
             );
           })
         )}
-      </Box>
+      </RetroPanel>
 
-      <Box marginTop={1} flexDirection="column">
+      <RetroPanel title="Selected Conversation" borderColor={TUI_THEME.panelMuted}>
         <Text>
           Selected: {selectedConversation ? `${selectedConversation.id.slice(0, 12)} project=${selectedConversation.projectPath ?? selectedConversation.projectGroup ?? "unknown"}` : "none"}
         </Text>
-        <Text color="gray">
+        <Text color={TUI_THEME.subtle}>
           Source file: {selectedConversation ? truncateCell(selectedConversation.sourceFile, 90) : "n/a"}
         </Text>
-      </Box>
+      </RetroPanel>
 
       <Box marginTop={1}>
         <Text color={getNoticeColor(notice.tone)}>{busy ? "Working..." : notice.message}</Text>
@@ -918,38 +949,40 @@ function ContextsScreen(props: {
 
   return (
     <Box flexDirection="column">
-      <Text>Scope filter: {scopeFilter}</Text>
-      <Text color="gray">Keys: g scope | r refresh | up/down select | d delete | y/n confirm</Text>
+      <RetroPanel title="Context Controls" marginTop={0} borderColor={TUI_THEME.panelMuted}>
+        <Text>Scope filter: {scopeFilter}</Text>
+        <Text color={TUI_THEME.subtle}>Keys: g scope | r refresh | up/down select | d delete | y/n confirm</Text>
+      </RetroPanel>
 
-      <Box marginTop={1} flexDirection="column">
+      <RetroPanel title="Context Entries" borderColor={TUI_THEME.panelMuted}>
         <Text>{[padCell("ID", 10), padCell("SOURCE", 16), padCell("SCOPE", 8), "CONTENT"].join(" ")}</Text>
-        <Text color="gray">{["-".repeat(10), "-".repeat(16), "-".repeat(8), "-".repeat(44)].join(" ")}</Text>
+        <Text color={TUI_THEME.subtle}>{["-".repeat(10), "-".repeat(16), "-".repeat(8), "-".repeat(44)].join(" ")}</Text>
 
         {rowWindow.view.length === 0 ? (
-          <Text color="yellow">No context entries for current scope filter.</Text>
+          <Text color={TUI_THEME.warning}>No context entries for current scope filter.</Text>
         ) : (
           rowWindow.view.map((entry, offset) => {
             const absoluteIndex = rowWindow.start + offset;
             const selected = absoluteIndex === selectedIndex;
 
             return (
-              <Text key={entry.id} color={selected ? "green" : undefined}>
+              <Text key={entry.id} color={selected ? TUI_THEME.selected : undefined}>
                 {selected ? ">" : " "} {padCell(entry.id.slice(0, 10), 10)} {padCell(entry.sourceTool, 16)} {padCell(entry.scope, 8)} {truncateCell(entry.content, 44)}
               </Text>
             );
           })
         )}
-      </Box>
+      </RetroPanel>
 
-      <Box marginTop={1} flexDirection="column">
+      <RetroPanel title="Selected Context" borderColor={TUI_THEME.panelMuted}>
         <Text>
           Selected: {selectedEntry ? `${selectedEntry.id.slice(0, 12)} encrypted=${selectedEntry.encrypted ? "yes" : "no"}` : "none"}
         </Text>
-        <Text color="gray">
+        <Text color={TUI_THEME.subtle}>
           Tags: {selectedEntry && selectedEntry.tags.length > 0 ? selectedEntry.tags.join(",") : "none"}
         </Text>
-        <Text color="gray">Updated: {shortTimestamp(selectedEntry?.updatedAt)}</Text>
-      </Box>
+        <Text color={TUI_THEME.subtle}>Updated: {shortTimestamp(selectedEntry?.updatedAt)}</Text>
+      </RetroPanel>
 
       <Box marginTop={1}>
         <Text color={getNoticeColor(notice.tone)}>{busy ? "Working..." : notice.message}</Text>
