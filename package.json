@@ -1,6 +1,6 @@
 {
   "name": "pluro-cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local-first shared context CLI for agentic tools",
   "main": "dist/index.js",
   "bin": {
