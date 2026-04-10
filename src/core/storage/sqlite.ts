@@ -2,7 +2,15 @@ import Database from "better-sqlite3";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import type { HistoryEntry, PersistedContextEntry, SearchContextFilters } from "../types";
+import type {
+  ConversationDiscoveryFilters,
+  ConversationIngestState,
+  DiscoveredConversation,
+  HistoryEntry,
+  PersistedContextEntry,
+  SearchContextFilters,
+  SupportedIde
+} from "../types";
 
 export interface ContextPageCursor {
   updatedAt: string;
@@ -30,6 +38,29 @@ interface SqliteHistoryRow {
   action: HistoryEntry["action"];
   payload_json: string;
   created_at: string;
+}
+
+interface SqliteDiscoveredConversationRow {
+  id: string;
+  ide: SupportedIde;
+  source_file: string;
+  source_hash: string;
+  conversation_key: string;
+  title: string;
+  project_path: string | null;
+  message_count: number;
+  format: string;
+  size_bytes: number;
+  last_modified_at: string | null;
+  scanned_at: string;
+  metadata_json: string;
+}
+
+interface SqliteConversationIngestRow {
+  conversation_id: string;
+  source_hash: string;
+  last_ingested_at: string;
+  result_json: string;
 }
 
 export class SqliteStore {
@@ -72,6 +103,39 @@ export class SqliteStore {
 
       CREATE INDEX IF NOT EXISTS idx_history_entry_id ON context_history(entry_id);
       CREATE INDEX IF NOT EXISTS idx_history_created_at ON context_history(created_at DESC);
+
+      CREATE TABLE IF NOT EXISTS discovered_conversations (
+        id TEXT PRIMARY KEY,
+        ide TEXT NOT NULL,
+        source_file TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        conversation_key TEXT NOT NULL,
+        title TEXT NOT NULL,
+        project_path TEXT,
+        message_count INTEGER NOT NULL,
+        format TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        last_modified_at TEXT,
+        scanned_at TEXT NOT NULL,
+        metadata_json TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_discovered_conversations_ide_project
+        ON discovered_conversations(ide, project_path, scanned_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_discovered_conversations_source_file
+        ON discovered_conversations(source_file);
+      CREATE INDEX IF NOT EXISTS idx_discovered_conversations_scanned_at
+        ON discovered_conversations(scanned_at DESC);
+
+      CREATE TABLE IF NOT EXISTS conversation_ingest_state (
+        conversation_id TEXT PRIMARY KEY,
+        source_hash TEXT NOT NULL,
+        last_ingested_at TEXT NOT NULL,
+        result_json TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_conversation_ingest_last_ingested_at
+        ON conversation_ingest_state(last_ingested_at DESC);
     `);
   }
 
@@ -202,6 +266,136 @@ export class SqliteStore {
     return rows.map((row) => this.fromContextRow(row));
   }
 
+  replaceDiscoveredConversations(
+    ide: SupportedIde,
+    conversations: DiscoveredConversation[]
+  ): void {
+    this.runInTransaction(() => {
+      this.db.prepare("DELETE FROM discovered_conversations WHERE ide = ?").run(ide);
+
+      const insertStatement = this.db.prepare(`
+        INSERT INTO discovered_conversations (
+          id,
+          ide,
+          source_file,
+          source_hash,
+          conversation_key,
+          title,
+          project_path,
+          message_count,
+          format,
+          size_bytes,
+          last_modified_at,
+          scanned_at,
+          metadata_json
+        ) VALUES (
+          @id,
+          @ide,
+          @source_file,
+          @source_hash,
+          @conversation_key,
+          @title,
+          @project_path,
+          @message_count,
+          @format,
+          @size_bytes,
+          @last_modified_at,
+          @scanned_at,
+          @metadata_json
+        )
+      `);
+
+      for (const conversation of conversations) {
+        insertStatement.run(this.toDiscoveredConversationRow(conversation));
+      }
+    });
+  }
+
+  listDiscoveredConversations(filters: ConversationDiscoveryFilters = {}): DiscoveredConversation[] {
+    const clauses: string[] = [];
+    const params: Record<string, unknown> = {};
+
+    if (filters.ide) {
+      clauses.push("ide = @ide");
+      params.ide = filters.ide;
+    }
+
+    if (filters.projectPath) {
+      clauses.push("project_path = @projectPath");
+      params.projectPath = filters.projectPath;
+    }
+
+    const limit = Math.max(1, Math.min(filters.limit ?? 200, 5000));
+    params.limit = limit;
+
+    let query = "SELECT * FROM discovered_conversations";
+    if (clauses.length > 0) {
+      query += ` WHERE ${clauses.join(" AND ")}`;
+    }
+
+    query += " ORDER BY scanned_at DESC, source_file ASC, conversation_key ASC LIMIT @limit";
+
+    const statement = this.db.prepare(query);
+    const rows = statement.all(params) as SqliteDiscoveredConversationRow[];
+    return rows.map((row) => this.fromDiscoveredConversationRow(row));
+  }
+
+  getDiscoveredConversation(id: string): DiscoveredConversation | null {
+    const statement = this.db.prepare("SELECT * FROM discovered_conversations WHERE id = ?");
+    const row = statement.get(id) as SqliteDiscoveredConversationRow | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    return this.fromDiscoveredConversationRow(row);
+  }
+
+  upsertConversationIngestState(state: ConversationIngestState): void {
+    const statement = this.db.prepare(`
+      INSERT INTO conversation_ingest_state (
+        conversation_id,
+        source_hash,
+        last_ingested_at,
+        result_json
+      ) VALUES (
+        @conversation_id,
+        @source_hash,
+        @last_ingested_at,
+        @result_json
+      )
+      ON CONFLICT(conversation_id) DO UPDATE SET
+        source_hash = excluded.source_hash,
+        last_ingested_at = excluded.last_ingested_at,
+        result_json = excluded.result_json
+    `);
+
+    statement.run({
+      conversation_id: state.conversationId,
+      source_hash: state.sourceHash,
+      last_ingested_at: state.lastIngestedAt,
+      result_json: JSON.stringify(state.result)
+    });
+  }
+
+  getConversationIngestState(conversationId: string): ConversationIngestState | null {
+    const statement = this.db.prepare(
+      "SELECT * FROM conversation_ingest_state WHERE conversation_id = ?"
+    );
+
+    const row = statement.get(conversationId) as SqliteConversationIngestRow | undefined;
+    if (!row) {
+      return null;
+    }
+
+    return {
+      conversationId: row.conversation_id,
+      sourceHash: row.source_hash,
+      lastIngestedAt: row.last_ingested_at,
+      result: JSON.parse(row.result_json) as ConversationIngestState["result"]
+    };
+  }
+
   appendHistory(entry: HistoryEntry): void {
     const statement = this.db.prepare(`
       INSERT INTO context_history (
@@ -310,6 +504,46 @@ export class SqliteStore {
       parentId: row.parent_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at
+    };
+  }
+
+  private toDiscoveredConversationRow(
+    conversation: DiscoveredConversation
+  ): Record<string, unknown> {
+    return {
+      id: conversation.id,
+      ide: conversation.ide,
+      source_file: conversation.sourceFile,
+      source_hash: conversation.sourceHash,
+      conversation_key: conversation.conversationKey,
+      title: conversation.title,
+      project_path: conversation.projectPath ?? null,
+      message_count: conversation.messageCount,
+      format: conversation.format,
+      size_bytes: conversation.sizeBytes,
+      last_modified_at: conversation.lastModifiedAt ?? null,
+      scanned_at: conversation.scannedAt,
+      metadata_json: JSON.stringify(conversation.metadata)
+    };
+  }
+
+  private fromDiscoveredConversationRow(
+    row: SqliteDiscoveredConversationRow
+  ): DiscoveredConversation {
+    return {
+      id: row.id,
+      ide: row.ide,
+      sourceFile: row.source_file,
+      sourceHash: row.source_hash,
+      conversationKey: row.conversation_key,
+      title: row.title,
+      projectPath: row.project_path ?? undefined,
+      messageCount: row.message_count,
+      format: row.format,
+      sizeBytes: row.size_bytes,
+      lastModifiedAt: row.last_modified_at ?? undefined,
+      scannedAt: row.scanned_at,
+      metadata: JSON.parse(row.metadata_json) as Record<string, string>
     };
   }
 }

@@ -2,21 +2,32 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createInterface } from "node:readline/promises";
 
 import { Command } from "commander";
 
 import { FileAdapterEngine, type SyncDirection } from "../adapters/file-sync";
 import {
   BUILTIN_ADAPTER_PROFILES,
+  findAdapterProfileById,
   listPrimaryIdeProfiles,
   type AdapterSyncMode
 } from "../adapters/profiles";
 import type { ConflictPolicy } from "../core/conflict-resolution";
 import { ensureDataDirectory, resolvePaths, type PluroPaths } from "../core/config";
 import { ContextService } from "../core/context-service";
+import { ConversationDiscoveryService } from "../core/conversation-discovery";
 import { EncryptionService } from "../core/security/encryption";
 import { SqliteStore } from "../core/storage/sqlite";
-import type { ContextSnapshot, SearchContextFilters, UpdateContextInput } from "../core/types";
+import type {
+  ContextSnapshot,
+  ConversationInjectResult,
+  ConversationScanResult,
+  DiscoveredConversation,
+  SearchContextFilters,
+  SupportedIde,
+  UpdateContextInput
+} from "../core/types";
 import { getPluroVersion } from "../core/version";
 import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from "../daemon/protocol";
 import { runMcpStdioServer } from "../daemon/mcp-server";
@@ -170,6 +181,41 @@ interface DaemonStatusCliOptions {
   failOnError?: boolean;
 }
 
+interface ConversationScanCliOptions {
+  ide: string;
+  root?: string[];
+  recursive?: boolean;
+  project?: string;
+  maxFiles: string;
+  maxFileSizeMb: string;
+  includeSessionLogs?: boolean;
+  format: string;
+  failOnWarning?: boolean;
+  failOnError?: boolean;
+}
+
+interface ConversationListCliOptions {
+  ide?: string;
+  project?: string;
+  limit: string;
+  format: string;
+}
+
+interface ConversationInjectCliOptions {
+  policy: string;
+  skipUnchanged?: boolean;
+  scope?: string;
+  project?: string;
+  ide?: string;
+  projectFilter?: string;
+  limit?: string;
+  select?: string;
+  tag?: string[];
+  targetProfile?: string;
+  targetAdapter?: string;
+  format: string;
+}
+
 interface StatusFailureOptions {
   failOnWarning?: boolean;
   failOnError?: boolean;
@@ -284,6 +330,18 @@ function parseStatusOutputFormat(value: string): StatusOutputFormat {
   throw new Error(`Invalid format: ${value}. Expected json, table, or summary.`);
 }
 
+function parseSupportedIde(value: string): SupportedIde {
+  const normalized = value.trim().toLowerCase();
+
+  if (normalized === "cursor" || normalized === "vscode-copilot" || normalized === "antigravity") {
+    return normalized;
+  }
+
+  throw new Error(
+    `Invalid IDE: ${value}. Expected cursor, vscode-copilot, or antigravity.`
+  );
+}
+
 function toOverallHealth(summary: ConnectorStatusSummary): "healthy" | "warning" | "error" {
   if (summary.error > 0) {
     return "error";
@@ -338,6 +396,256 @@ function formatDaemonHealthSummary(url: string, payload: DaemonHealthTablePayloa
   const timestamp = payload.timestamp ?? "unknown";
 
   return `daemon_health status=ok service=${service} url=${url} timestamp=${timestamp}`;
+}
+
+function formatConversationScanSummary(payload: ConversationScanResult): string {
+  const overall = payload.errors.length > 0 ? "error" : payload.skipped > 0 ? "warning" : "healthy";
+
+  return [
+    "conversation_scan",
+    `ide=${payload.ide}`,
+    `roots=${payload.roots.length}`,
+    `scannedFiles=${payload.scannedFiles}`,
+    `discovered=${payload.discovered}`,
+    `skipped=${payload.skipped}`,
+    `errors=${payload.errors.length}`,
+    `overall=${overall}`,
+    `scannedAt=${payload.scannedAt}`
+  ].join(" ");
+}
+
+function formatConversationScanTable(payload: ConversationScanResult): string {
+  const lines: string[] = [];
+  lines.push(`Conversation Scan (${payload.ide})`);
+  lines.push(`Scanned: ${payload.scannedAt}`);
+  lines.push(
+    `Summary: roots=${payload.roots.length} files=${payload.scannedFiles} discovered=${payload.discovered} skipped=${payload.skipped} errors=${payload.errors.length}`
+  );
+  lines.push("");
+
+  lines.push(
+    [
+      padCell("IDE", 14),
+      padCell("PROJECT", 26),
+      padCell("MESSAGES", 9),
+      padCell("FORMAT", 16),
+      "TITLE"
+    ].join(" ")
+  );
+  lines.push(
+    ["-".repeat(14), "-".repeat(26), "-".repeat(9), "-".repeat(16), "-".repeat(36)].join(" ")
+  );
+
+  for (const conversation of payload.conversations.slice(0, 50)) {
+    lines.push(
+      [
+        padCell(conversation.ide, 14),
+        padCell(conversation.projectPath ?? "unknown", 26),
+        padCell(String(conversation.messageCount), 9),
+        padCell(conversation.format, 16),
+        truncateCell(conversation.title, 36)
+      ].join(" ")
+    );
+  }
+
+  if (payload.conversations.length > 50) {
+    lines.push(`... ${payload.conversations.length - 50} more conversation(s)`);
+  }
+
+  if (payload.errors.length > 0) {
+    lines.push("");
+    lines.push("Errors:");
+
+    for (const error of payload.errors.slice(0, 10)) {
+      lines.push(`- ${path.basename(error.file)}: ${error.error}`);
+    }
+
+    if (payload.errors.length > 10) {
+      lines.push(`- ... ${payload.errors.length - 10} more`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function formatConversationListSummary(conversations: DiscoveredConversation[]): string {
+  const byIde = new Map<string, number>();
+
+  for (const conversation of conversations) {
+    byIde.set(conversation.ide, (byIde.get(conversation.ide) ?? 0) + 1);
+  }
+
+  const ideSummary = [...byIde.entries()]
+    .map(([ide, count]) => `${ide}:${count}`)
+    .join(",");
+
+  return ["conversation_list", `total=${conversations.length}`, `byIde=${ideSummary || "none"}`].join(
+    " "
+  );
+}
+
+function formatConversationListTable(conversations: DiscoveredConversation[]): string {
+  const lines: string[] = [];
+
+  lines.push(`Discovered Conversations (${conversations.length})`);
+  lines.push("");
+  lines.push(
+    [
+      padCell("ID", 12),
+      padCell("IDE", 14),
+      padCell("PROJECT", 24),
+      padCell("MESSAGES", 9),
+      padCell("FORMAT", 14),
+      "TITLE"
+    ].join(" ")
+  );
+  lines.push(
+    ["-".repeat(12), "-".repeat(14), "-".repeat(24), "-".repeat(9), "-".repeat(14), "-".repeat(34)].join(
+      " "
+    )
+  );
+
+  for (const conversation of conversations) {
+    lines.push(
+      [
+        padCell(conversation.id.slice(0, 12), 12),
+        padCell(conversation.ide, 14),
+        padCell(conversation.projectPath ?? "unknown", 24),
+        padCell(String(conversation.messageCount), 9),
+        padCell(conversation.format, 14),
+        truncateCell(conversation.title, 34)
+      ].join(" ")
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function formatConversationPickerTable(conversations: DiscoveredConversation[]): string {
+  const lines: string[] = [];
+
+  lines.push("Pick A Conversation");
+  lines.push("");
+  lines.push(
+    [
+      padCell("#", 4),
+      padCell("IDE", 14),
+      padCell("PROJECT", 24),
+      padCell("MESSAGES", 9),
+      "TITLE"
+    ].join(" ")
+  );
+  lines.push(["-".repeat(4), "-".repeat(14), "-".repeat(24), "-".repeat(9), "-".repeat(36)].join(" "));
+
+  for (const [index, conversation] of conversations.entries()) {
+    lines.push(
+      [
+        padCell(String(index + 1), 4),
+        padCell(conversation.ide, 14),
+        padCell(conversation.projectPath ?? "unknown", 24),
+        padCell(String(conversation.messageCount), 9),
+        truncateCell(conversation.title, 36)
+      ].join(" ")
+    );
+  }
+
+  return lines.join("\n");
+}
+
+async function selectConversationCandidate(
+  conversations: DiscoveredConversation[],
+  requestedIndex: string | undefined
+): Promise<DiscoveredConversation> {
+  if (conversations.length === 0) {
+    throw new Error("No discovered conversations are available.");
+  }
+
+  if (requestedIndex !== undefined) {
+    const selected = parseOptionalIntValue(requestedIndex);
+    if (selected === undefined || selected < 1 || selected > conversations.length) {
+      throw new Error(
+        `Invalid --select value: ${requestedIndex}. Expected a number between 1 and ${conversations.length}.`
+      );
+    }
+
+    return conversations[selected - 1] as DiscoveredConversation;
+  }
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(
+      "No conversationId was provided and interactive mode is unavailable. Use --select <number> or pass conversationId explicitly."
+    );
+  }
+
+  printText(formatConversationPickerTable(conversations));
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  try {
+    while (true) {
+      const answer = (await rl.question(`Select conversation [1-${conversations.length}] (q to cancel): `)).trim();
+
+      if (answer.toLowerCase() === "q" || answer.toLowerCase() === "quit") {
+        throw new Error("Conversation selection canceled.");
+      }
+
+      const selected = parseOptionalIntValue(answer);
+      if (selected && selected >= 1 && selected <= conversations.length) {
+        return conversations[selected - 1] as DiscoveredConversation;
+      }
+
+      printText(`Invalid selection. Enter a number between 1 and ${conversations.length}, or q to cancel.`);
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+function formatConversationInjectSummary(payload: {
+  ide: SupportedIde;
+  inject: ConversationInjectResult;
+  exportResult?: Record<string, unknown>;
+}): string {
+  const parts = [
+    "conversation_inject",
+    `ide=${payload.ide}`,
+    `id=${payload.inject.conversationId}`,
+    `skipped=${payload.inject.skipped ? "1" : "0"}`
+  ];
+
+  if (payload.inject.reason) {
+    parts.push(`reason=${payload.inject.reason}`);
+  }
+
+  if (payload.inject.result) {
+    parts.push(`imported=${payload.inject.result.imported}`);
+    parts.push(`updated=${payload.inject.result.updated}`);
+    parts.push(`duplicated=${payload.inject.result.duplicated}`);
+    parts.push(`skippedEntries=${payload.inject.result.skipped}`);
+  }
+
+  if (payload.exportResult) {
+    parts.push("exported=1");
+  }
+
+  return parts.join(" ");
+}
+
+function applyConversationScanFailurePolicy(
+  payload: ConversationScanResult,
+  options: Pick<ConversationScanCliOptions, "failOnError" | "failOnWarning">
+): void {
+  if (options.failOnError && payload.errors.length > 0) {
+    process.exitCode = 1;
+    return;
+  }
+
+  if (options.failOnWarning && (payload.errors.length > 0 || payload.skipped > 0)) {
+    process.exitCode = 1;
+  }
 }
 
 function formatConnectorStatusSummary(payload: ConnectorStatusTablePayload): string {
@@ -651,6 +959,30 @@ async function runAdapterSyncOnce(
   return result;
 }
 
+function resolveTargetAdapterFile(
+  paths: PluroPaths,
+  options: Pick<ConversationInjectCliOptions, "targetAdapter" | "targetProfile">
+): string | undefined {
+  if (options.targetAdapter && options.targetProfile) {
+    throw new Error("Use either --target-adapter or --target-profile, not both.");
+  }
+
+  if (options.targetAdapter) {
+    return path.resolve(options.targetAdapter);
+  }
+
+  if (!options.targetProfile) {
+    return undefined;
+  }
+
+  const profile = findAdapterProfileById(options.targetProfile);
+  if (!profile) {
+    throw new Error(`Unknown target profile: ${options.targetProfile}`);
+  }
+
+  return path.join(paths.dataDir, profile.suggestedPath, "pluro.adapter.json");
+}
+
 function getGlobalOptions(command: Command): GlobalCliOptions {
   const options = command.optsWithGlobals() as Partial<GlobalCliOptions>;
   return {
@@ -895,6 +1227,185 @@ program
       printJson(history);
     });
   });
+
+const conversationCommand = program
+  .command("conversation")
+  .description("Discover and inject IDE conversations");
+
+conversationCommand
+  .command("scan")
+  .description("Scan known local roots for one IDE and index discovered conversations")
+  .requiredOption("--ide <ide>", "cursor, vscode-copilot, or antigravity")
+  .option("--root <path...>", "Optional explicit scan roots")
+  .option("--no-recursive", "Disable recursive scanning")
+  .option("--project <path>", "Override project path for discovered conversations")
+  .option("--max-files <number>", "Maximum files to scan", "5000")
+  .option("--max-file-size-mb <number>", "Maximum candidate file size in MB", "10")
+  .option("--no-include-session-logs", "Ignore .jsonl and .log files")
+  .option("--format <format>", "json, table, or summary", "json")
+  .option("--fail-on-warning", "Exit with code 1 when scan has skipped files or errors", false)
+  .option("--fail-on-error", "Exit with code 1 when scan has errors", false)
+  .action(async (options: ConversationScanCliOptions, command: Command) => {
+    const ide = parseSupportedIde(options.ide);
+    const outputFormat = parseStatusOutputFormat(options.format);
+    const maxFiles = parseIntValue(String(options.maxFiles), 5000);
+    const maxFileSizeMb = Math.max(1, parseIntValue(String(options.maxFileSizeMb), 10));
+
+    await withService(command, async (service) => {
+      const discovery = new ConversationDiscoveryService(service);
+      const result = await discovery.scan({
+        ide,
+        roots: options.root,
+        recursive: options.recursive !== false,
+        projectPath: options.project,
+        maxFiles,
+        maxFileSizeBytes: maxFileSizeMb * 1024 * 1024,
+        includeSessionLogs: options.includeSessionLogs !== false
+      });
+
+      if (outputFormat === "summary") {
+        printText(formatConversationScanSummary(result));
+      } else if (outputFormat === "table") {
+        printText(formatConversationScanTable(result));
+      } else {
+        printJson({ ok: true, ...result });
+      }
+
+      applyConversationScanFailurePolicy(result, options);
+    });
+  });
+
+conversationCommand
+  .command("list")
+  .description("List conversations discovered by the latest scan")
+  .option("--ide <ide>", "Filter by IDE: cursor, vscode-copilot, or antigravity")
+  .option("--project <path>", "Filter by detected project path")
+  .option("--limit <number>", "Maximum rows to return", "200")
+  .option("--format <format>", "json, table, or summary", "json")
+  .action(async (options: ConversationListCliOptions, command: Command) => {
+    const outputFormat = parseStatusOutputFormat(options.format);
+    const ide = options.ide ? parseSupportedIde(options.ide) : undefined;
+    const limit = parseIntValue(String(options.limit), 200);
+
+    await withService(command, async (service) => {
+      const discovery = new ConversationDiscoveryService(service);
+      const conversations = discovery.list(ide, options.project, limit);
+
+      if (outputFormat === "summary") {
+        printText(formatConversationListSummary(conversations));
+        return;
+      }
+
+      if (outputFormat === "table") {
+        printText(formatConversationListTable(conversations));
+        return;
+      }
+
+      printJson({
+        ok: true,
+        ide: ide ?? "all",
+        projectPath: options.project,
+        total: conversations.length,
+        conversations
+      });
+    });
+  });
+
+conversationCommand
+  .command("inject")
+  .description("Inject one discovered conversation into Pluro context store")
+  .argument("[conversationId]", "Discovered conversation id from conversation list")
+  .option("--policy <policy>", "Conflict policy: lww or keep-both", "keep-both")
+  .option("--no-skip-unchanged", "Always import even when source hash is unchanged")
+  .option("--scope <scope>", "Scope for imported entries", "project")
+  .option("--project <path>", "Override project path metadata")
+  .option("--ide <ide>", "Filter candidates by IDE when conversationId is omitted")
+  .option("--project-filter <path>", "Filter candidates by project path when conversationId is omitted")
+  .option("--limit <number>", "Limit candidate rows when conversationId is omitted", "50")
+  .option("--select <number>", "Choose candidate index (1-based) when conversationId is omitted")
+  .option("--tag <tag...>", "Additional tags for imported entries")
+  .option("--target-profile <profileId>", "Export to this target adapter profile after import")
+  .option("--target-adapter <path>", "Export to this explicit adapter config file after import")
+  .option("--format <format>", "json or summary", "json")
+  .action(
+    async (conversationId: string | undefined, options: ConversationInjectCliOptions, command: Command) => {
+      const outputFormat = parseStatusOutputFormat(options.format);
+      if (outputFormat === "table") {
+        throw new Error("Conversation inject supports json or summary output.");
+      }
+
+      const policy = options.policy as ConflictPolicy;
+      if (policy !== "lww" && policy !== "keep-both") {
+        throw new Error(`Invalid conflict policy: ${options.policy}`);
+      }
+
+      await withService(command, async (service, paths) => {
+        const discovery = new ConversationDiscoveryService(service);
+        let resolvedConversationId = conversationId;
+        let discovered: DiscoveredConversation | null = null;
+
+        if (!resolvedConversationId) {
+          const limit = parseIntValue(String(options.limit ?? "50"), 50);
+          const ideFilter = options.ide ? parseSupportedIde(options.ide) : undefined;
+          const candidates = discovery.list(ideFilter, options.projectFilter, limit);
+
+          if (candidates.length === 0) {
+            throw new Error(
+              "No discovered conversations found for selection. Run 'pluro conversation scan --ide <ide>' first."
+            );
+          }
+
+          discovered = await selectConversationCandidate(candidates, options.select);
+          resolvedConversationId = discovered.id;
+        }
+
+        if (!resolvedConversationId) {
+          throw new Error("Unable to resolve conversation id for injection.");
+        }
+
+        discovered = discovered ?? service.getDiscoveredConversation(resolvedConversationId);
+
+        if (!discovered) {
+          throw new Error(`Conversation not found: ${resolvedConversationId}`);
+        }
+
+        const injectResult = await discovery.injectConversation({
+          conversationId: resolvedConversationId,
+          policy,
+          skipUnchanged: options.skipUnchanged !== false,
+          scope: options.scope,
+          tags: options.tag,
+          projectPath: options.project
+        });
+
+        const targetAdapterFile = resolveTargetAdapterFile(paths, options);
+        let exportResult: Record<string, unknown> | undefined;
+
+        if (!injectResult.skipped && targetAdapterFile) {
+          const engine = new FileAdapterEngine(paths.dataDir);
+          exportResult = await runAdapterSyncOnce(service, engine, targetAdapterFile, "export");
+        }
+
+        if (outputFormat === "summary") {
+          printText(
+            formatConversationInjectSummary({
+              ide: discovered.ide,
+              inject: injectResult,
+              exportResult
+            })
+          );
+          return;
+        }
+
+        printJson({
+          ok: true,
+          ide: discovered.ide,
+          inject: injectResult,
+          exportResult
+        });
+      });
+    }
+  );
 
 const connectorCommand = program.command("connector").description("Manage tool adapter profiles");
 

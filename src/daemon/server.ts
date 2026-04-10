@@ -10,7 +10,13 @@ import {
 } from "../adapters/profiles";
 import type { ConflictPolicy } from "../core/conflict-resolution";
 import { ContextService } from "../core/context-service";
-import type { CreateContextInput, SearchContextFilters, UpdateContextInput } from "../core/types";
+import { ConversationDiscoveryService } from "../core/conversation-discovery";
+import type {
+  CreateContextInput,
+  SearchContextFilters,
+  SupportedIde,
+  UpdateContextInput
+} from "../core/types";
 import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from "./protocol";
 
 export interface DaemonServerOptions {
@@ -98,6 +104,16 @@ function parseBooleanFlag(value: string | null): boolean {
 
   const normalized = value.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function parseSupportedIde(value: string | null): SupportedIde {
+  const normalized = (value ?? "").trim().toLowerCase();
+
+  if (normalized === "cursor" || normalized === "vscode-copilot" || normalized === "antigravity") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid ide: ${value}. Expected cursor, vscode-copilot, or antigravity.`);
 }
 
 export async function startDaemonServer(
@@ -192,6 +208,92 @@ export async function startDaemonServer(
 
         const result = await service.importSnapshot(body.snapshot, body.policy ?? "lww");
         sendJson(res, 200, { ok: true, result });
+        return;
+      }
+
+      if (pathname === "/conversations" && method === "GET") {
+        const ideRaw = url.searchParams.get("ide");
+        const ide = ideRaw ? parseSupportedIde(ideRaw) : undefined;
+        const projectPath = url.searchParams.get("projectPath") ?? undefined;
+        const limit = parseOptionalInt(url.searchParams.get("limit")) ?? 200;
+
+        const discovery = new ConversationDiscoveryService(service);
+        const conversations = discovery.list(ide, projectPath, limit);
+
+        sendJson(res, 200, {
+          ok: true,
+          ide: ide ?? "all",
+          projectPath,
+          total: conversations.length,
+          conversations
+        });
+        return;
+      }
+
+      if (pathname === "/conversations/scan" && method === "POST") {
+        const body = (await readJsonBody(req)) as {
+          ide?: string;
+          roots?: string[];
+          recursive?: boolean;
+          projectPath?: string;
+          maxFiles?: number;
+          maxFileSizeBytes?: number;
+          includeSessionLogs?: boolean;
+        };
+
+        if (!body || typeof body.ide !== "string") {
+          sendJson(res, 400, { ok: false, error: "ide is required" });
+          return;
+        }
+
+        const discovery = new ConversationDiscoveryService(service);
+        const result = await discovery.scan({
+          ide: parseSupportedIde(body.ide),
+          roots: Array.isArray(body.roots)
+            ? body.roots.filter((root) => typeof root === "string" && root.trim().length > 0)
+            : undefined,
+          recursive: body.recursive !== false,
+          projectPath: body.projectPath,
+          maxFiles: body.maxFiles,
+          maxFileSizeBytes: body.maxFileSizeBytes,
+          includeSessionLogs: body.includeSessionLogs !== false
+        });
+
+        sendJson(res, 200, { ok: true, ...result });
+        return;
+      }
+
+      if (pathname === "/conversations/inject" && method === "POST") {
+        const body = (await readJsonBody(req)) as {
+          conversationId?: string;
+          policy?: ConflictPolicy;
+          skipUnchanged?: boolean;
+          scope?: string;
+          tags?: string[];
+          projectPath?: string;
+        };
+
+        if (!body || typeof body.conversationId !== "string") {
+          sendJson(res, 400, { ok: false, error: "conversationId is required" });
+          return;
+        }
+
+        if (body.policy && body.policy !== "lww" && body.policy !== "keep-both") {
+          sendJson(res, 400, { ok: false, error: `Invalid conflict policy: ${body.policy}` });
+          return;
+        }
+
+        const discovery = new ConversationDiscoveryService(service);
+        const result = await discovery.injectConversation({
+          conversationId: body.conversationId,
+          policy: body.policy,
+          skipUnchanged: body.skipUnchanged !== false,
+          scope: body.scope,
+          tags: body.tags,
+          projectPath: body.projectPath
+        });
+
+        sendJson(res, 200, { ok: true, inject: result });
         return;
       }
 

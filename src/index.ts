@@ -1,5 +1,6 @@
 export * from "./core/types";
 export * from "./core/context-service";
+export * from "./core/conversation-discovery";
 export * from "./core/conflict-resolution";
 export * from "./core/config";
 export * from "./adapters/file-sync";

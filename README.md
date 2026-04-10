@@ -116,6 +116,42 @@ Emit daemon connector health as a one-line summary for scripts:
 pluro daemon status --port 43111 --connectors --focus primary --format summary
 ```
 
+Scan known Cursor conversation roots and index discovered conversations:
+
+```bash
+pluro conversation scan --ide cursor --format table
+```
+
+List discovered conversations for one IDE:
+
+```bash
+pluro conversation list --ide cursor --format table
+```
+
+Inject one discovered conversation into Pluro store:
+
+```bash
+pluro conversation inject <conversation-id>
+```
+
+Pick from discovered conversations interactively (when no id is passed):
+
+```bash
+pluro conversation inject --ide cursor
+```
+
+Pick by index in scripts/non-interactive terminals:
+
+```bash
+pluro conversation inject --ide cursor --select 1 --format summary
+```
+
+Inject and immediately export to a target profile adapter (for cross-IDE delivery):
+
+```bash
+pluro conversation inject <conversation-id> --target-profile vscode-copilot-file
+```
+
 Run MCP stdio server:
 
 ```bash
@@ -275,6 +311,7 @@ Environment variable alternative:
 - `context add|get|list|update|delete`
 - `snapshot export|import`
 - `history`
+- `conversation scan|list|inject`
 - `connector list|status|bootstrap|init|sync|watch`
 - `daemon run|status|mcp`
 
@@ -282,6 +319,18 @@ Daemon connector status endpoint:
 
 - `GET /connectors/status?focus=primary|all&syncMode=file-sync|mcp&compact=1`
 - `adapterFile` query param can be repeated to inspect explicit adapter files.
+
+Daemon conversation endpoints:
+
+- `POST /conversations/scan` with body `{ ide, roots?, recursive?, projectPath?, maxFiles?, maxFileSizeBytes?, includeSessionLogs? }`
+- `GET /conversations?ide=cursor|vscode-copilot|antigravity&projectPath=<path>&limit=<n>`
+- `POST /conversations/inject` with body `{ conversationId, policy?, skipUnchanged?, scope?, tags?, projectPath? }`
+
+Conversation inject picker behavior:
+
+- If `conversationId` is omitted, Pluro can pick from discovered conversations.
+- Use `--ide`, `--project-filter`, and `--limit` to narrow picker candidates.
+- Use `--select <number>` for non-interactive shells/automation.
 
 Status command output formats:
 

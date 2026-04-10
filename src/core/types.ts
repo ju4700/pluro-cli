@@ -119,3 +119,59 @@ export interface SnapshotImportResult {
   duplicated: number;
   conflicts: number;
 }
+
+export type SupportedIde = "cursor" | "vscode-copilot" | "antigravity";
+
+export interface DiscoveredConversation {
+  id: string;
+  ide: SupportedIde;
+  sourceFile: string;
+  sourceHash: string;
+  conversationKey: string;
+  title: string;
+  projectPath?: string;
+  messageCount: number;
+  format: string;
+  sizeBytes: number;
+  lastModifiedAt?: string;
+  scannedAt: string;
+  metadata: Record<string, string>;
+}
+
+export interface ConversationDiscoveryFilters {
+  ide?: SupportedIde;
+  projectPath?: string;
+  limit?: number;
+}
+
+export interface ConversationIngestState {
+  conversationId: string;
+  sourceHash: string;
+  lastIngestedAt: string;
+  result: SnapshotImportResult;
+}
+
+export interface ConversationScanError {
+  file: string;
+  error: string;
+}
+
+export interface ConversationScanResult {
+  ide: SupportedIde;
+  roots: string[];
+  scannedFiles: number;
+  discovered: number;
+  skipped: number;
+  errors: ConversationScanError[];
+  scannedAt: string;
+  conversations: DiscoveredConversation[];
+}
+
+export interface ConversationInjectResult {
+  conversationId: string;
+  sourceFile: string;
+  sourceHash: string;
+  skipped: boolean;
+  reason?: string;
+  result?: SnapshotImportResult;
+}

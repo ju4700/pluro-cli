@@ -4,6 +4,9 @@ import { resolveConflict, type ConflictPolicy } from "./conflict-resolution";
 import { EncryptionService } from "./security/encryption";
 import { SqliteStore, type ContextPageCursor } from "./storage/sqlite";
 import {
+  type ConversationDiscoveryFilters,
+  type ConversationIngestState,
+  type DiscoveredConversation,
   contextSnapshotSchema,
   type ContextListPage,
   type ContextEntry,
@@ -14,6 +17,7 @@ import {
   type SearchContextFilters,
   type SnapshotExportOptions,
   type SnapshotImportResult,
+  type SupportedIde,
   type UpdateContextInput
 } from "./types";
 
@@ -159,6 +163,26 @@ export class ContextService {
 
   listHistory(entryId?: string, limit = 100): HistoryEntry[] {
     return this.store.listHistory(entryId, limit);
+  }
+
+  replaceDiscoveredConversations(ide: SupportedIde, conversations: DiscoveredConversation[]): void {
+    this.store.replaceDiscoveredConversations(ide, conversations);
+  }
+
+  listDiscoveredConversations(filters: ConversationDiscoveryFilters = {}): DiscoveredConversation[] {
+    return this.store.listDiscoveredConversations(filters);
+  }
+
+  getDiscoveredConversation(id: string): DiscoveredConversation | null {
+    return this.store.getDiscoveredConversation(id);
+  }
+
+  getConversationIngestState(conversationId: string): ConversationIngestState | null {
+    return this.store.getConversationIngestState(conversationId);
+  }
+
+  upsertConversationIngestState(state: ConversationIngestState): void {
+    this.store.upsertConversationIngestState(state);
   }
 
   async exportSnapshot(options: SnapshotExportOptions = {}): Promise<ContextSnapshot> {

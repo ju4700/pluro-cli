@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import type { ConflictPolicy } from "../core/conflict-resolution";
 import { ContextService } from "../core/context-service";
+import { ConversationDiscoveryService } from "../core/conversation-discovery";
 import { getPluroVersion } from "../core/version";
 
 const addContextArgsSchema = z.object({
@@ -54,7 +55,34 @@ const historyArgsSchema = z.object({
   limit: z.number().int().min(1).max(5000).optional()
 });
 
-function toToolResult(payload: Record<string, unknown>) {
+const conversationScanArgsSchema = z.object({
+  ide: z.enum(["cursor", "vscode-copilot", "antigravity"]),
+  roots: z.array(z.string()).optional(),
+  recursive: z.boolean().optional(),
+  projectPath: z.string().optional(),
+  maxFiles: z.number().int().min(1).max(20000).optional(),
+  maxFileSizeBytes: z.number().int().min(1024).optional(),
+  includeSessionLogs: z.boolean().optional()
+});
+
+const conversationListArgsSchema = z.object({
+  ide: z.enum(["cursor", "vscode-copilot", "antigravity"]).optional(),
+  projectPath: z.string().optional(),
+  limit: z.number().int().min(1).max(5000).optional()
+});
+
+const conversationInjectArgsSchema = z.object({
+  conversationId: z.string().min(1),
+  policy: z.enum(["lww", "keep-both"]).optional(),
+  skipUnchanged: z.boolean().optional(),
+  scope: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  projectPath: z.string().optional()
+});
+
+function toToolResult(payload: unknown) {
+  const structuredContent = normalizeUnknownObject(payload);
+
   return {
     content: [
       {
@@ -62,7 +90,7 @@ function toToolResult(payload: Record<string, unknown>) {
         text: JSON.stringify(payload, null, 2)
       }
     ],
-    structuredContent: payload
+    structuredContent
   };
 }
 
@@ -183,6 +211,57 @@ const TOOL_DEFINITIONS: Tool[] = [
         limit: { type: "number" }
       }
     }
+  },
+  {
+    name: "pluro_conversation_scan",
+    description: "Scan local IDE roots and index discovered conversations.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ide: { type: "string", enum: ["cursor", "vscode-copilot", "antigravity"] },
+        roots: {
+          type: "array",
+          items: { type: "string" }
+        },
+        recursive: { type: "boolean" },
+        projectPath: { type: "string" },
+        maxFiles: { type: "number" },
+        maxFileSizeBytes: { type: "number" },
+        includeSessionLogs: { type: "boolean" }
+      },
+      required: ["ide"]
+    }
+  },
+  {
+    name: "pluro_conversation_list",
+    description: "List conversations discovered by previous scans.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ide: { type: "string", enum: ["cursor", "vscode-copilot", "antigravity"] },
+        projectPath: { type: "string" },
+        limit: { type: "number" }
+      }
+    }
+  },
+  {
+    name: "pluro_conversation_inject",
+    description: "Inject one discovered conversation into the pluro store.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversationId: { type: "string" },
+        policy: { type: "string", enum: ["lww", "keep-both"] },
+        skipUnchanged: { type: "boolean" },
+        scope: { type: "string" },
+        tags: {
+          type: "array",
+          items: { type: "string" }
+        },
+        projectPath: { type: "string" }
+      },
+      required: ["conversationId"]
+    }
   }
 ];
 
@@ -255,6 +334,39 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
         const payload = historyArgsSchema.parse(args);
         const history = service.listHistory(payload.entryId, payload.limit ?? 100);
         return toToolResult({ history, count: history.length });
+      }
+
+      if (toolName === "pluro_conversation_scan") {
+        const payload = conversationScanArgsSchema.parse(args);
+        const discovery = new ConversationDiscoveryService(service);
+        const result = await discovery.scan(payload);
+        return toToolResult(result);
+      }
+
+      if (toolName === "pluro_conversation_list") {
+        const payload = conversationListArgsSchema.parse(args);
+        const discovery = new ConversationDiscoveryService(service);
+        const conversations = discovery.list(payload.ide, payload.projectPath, payload.limit ?? 200);
+        return toToolResult({
+          ide: payload.ide ?? "all",
+          projectPath: payload.projectPath,
+          conversations,
+          total: conversations.length
+        });
+      }
+
+      if (toolName === "pluro_conversation_inject") {
+        const payload = conversationInjectArgsSchema.parse(args);
+        const discovery = new ConversationDiscoveryService(service);
+        const result = await discovery.injectConversation({
+          conversationId: payload.conversationId,
+          policy: payload.policy as ConflictPolicy | undefined,
+          skipUnchanged: payload.skipUnchanged,
+          scope: payload.scope,
+          tags: payload.tags,
+          projectPath: payload.projectPath
+        });
+        return toToolResult({ inject: result });
       }
 
       return toToolError(`Unknown tool: ${toolName}`);
