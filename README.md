@@ -285,6 +285,28 @@ Status command failure flags:
 - `npm run verify:ci`: CI-equivalent local gate (`typecheck`, `test`, `verify:mcp`)
 - `npm run verify:release-tag -- vX.Y.Z`: ensure pushed release tag matches package version
 
+## Publishing
+
+1. Create an npm automation token in npm account settings.
+2. Add repository secret `NPM_TOKEN` in GitHub:
+	- GitHub repository Settings -> Secrets and variables -> Actions -> New repository secret
+	- Name: `NPM_TOKEN`
+	- Value: npm token string from step 1
+3. Ensure package version in `package.json` matches your release tag version.
+4. Create and push a semver tag in format `vMAJOR.MINOR.PATCH`.
+
+Example:
+
+```bash
+npm version patch
+git push origin main
+git push origin --tags
+```
+
+Tag push triggers the Release workflow and publishes to npm.
+
+Manual release trigger is also supported, but requires entering the tag input (for example `v0.2.1`).
+
 GitHub Actions runs the CI gate on push and pull request via [.github/workflows/ci.yml](.github/workflows/ci.yml).
 Releases run from tags via [.github/workflows/release.yml](.github/workflows/release.yml).
 

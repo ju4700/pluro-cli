@@ -1,5 +1,8 @@
 name: Release
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   push:
     tags:
@@ -8,7 +11,7 @@ on:
     inputs:
       tag:
         description: "Release tag in vMAJOR.MINOR.PATCH format"
-        required: false
+        required: true
         type: string
 
 jobs:
@@ -40,9 +43,16 @@ jobs:
         id: tag
         run: |
           TAG="${{ github.ref_name }}"
-          if [ -n "${{ inputs.tag }}" ]; then
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
           fi
+
+          if [ -z "$TAG" ]; then
+            echo "Release tag is required. Use push tag trigger or provide workflow_dispatch input 'tag'."
+            exit 1
+          fi
+
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Using tag: $TAG"
 
