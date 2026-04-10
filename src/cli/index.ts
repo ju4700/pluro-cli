@@ -17,6 +17,7 @@ import { ContextService } from "../core/context-service";
 import { EncryptionService } from "../core/security/encryption";
 import { SqliteStore } from "../core/storage/sqlite";
 import type { ContextSnapshot, SearchContextFilters, UpdateContextInput } from "../core/types";
+import { getPluroVersion } from "../core/version";
 import { DEFAULT_DAEMON_HOST, DEFAULT_DAEMON_PORT } from "../daemon/protocol";
 import { runMcpStdioServer } from "../daemon/mcp-server";
 import { startDaemonServer } from "../daemon/server";
@@ -693,7 +694,7 @@ const program = new Command();
 program
   .name("pluro")
   .description("Local-first shared context CLI for LLMs and agentic tools")
-  .version("0.2.0")
+  .version(getPluroVersion())
   .option("--data-dir <path>", "Path to pluro data directory")
   .option("--db-path <path>", "Path to SQLite context database")
   .option("--passphrase <passphrase>", "Fallback passphrase when keychain is unavailable")

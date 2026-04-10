@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import type { ConflictPolicy } from "../core/conflict-resolution";
 import { ContextService } from "../core/context-service";
+import { getPluroVersion } from "../core/version";
 
 const addContextArgsSchema = z.object({
   content: z.string().min(1),
@@ -189,7 +190,7 @@ export async function runMcpStdioServer(service: ContextService): Promise<void> 
   const server = new Server(
     {
       name: "pluro-mcp",
-      version: "0.2.0"
+      version: getPluroVersion()
     },
     {
       capabilities: {
