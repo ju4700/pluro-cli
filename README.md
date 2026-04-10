@@ -287,7 +287,9 @@ Status command failure flags:
 
 ## Publishing
 
-1. Create an npm automation token in npm account settings.
+1. Create an npm token in npm account settings with publish permissions and 2FA bypass for publishing.
+   - For granular tokens, enable package publish permission and bypass package publishing 2FA.
+   - Otherwise npm publish from GitHub Actions may fail with `E403`.
 2. Add repository secret `NPM_TOKEN` in GitHub:
 	- GitHub repository Settings -> Secrets and variables -> Actions -> New repository secret
 	- Name: `NPM_TOKEN`
