@@ -48,7 +48,7 @@ interface DashboardSummary {
 }
 
 const TABS: ReadonlyArray<{ id: TabId; label: string }> = [
-  { id: "dashboard", label: "Dashboard" },
+  { id: "dashboard", label: "General" },
   { id: "conversations", label: "Transfer" },
   { id: "contexts", label: "Contexts" }
 ];
@@ -367,6 +367,10 @@ function parseTagInput(value: string): string[] {
   return [...new Set(tags)];
 }
 
+function shellTabLabel(tab: { id: TabId; label: string }, selected: boolean): string {
+  return selected ? `[${tab.label}]` : tab.label;
+}
+
 function horizontalRule(width: number): string {
   return "─".repeat(Math.max(8, width));
 }
@@ -377,15 +381,23 @@ function Panel(props: {
   children: React.ReactNode;
 }): React.ReactElement {
   return (
-    <Box
-      borderStyle="round"
-      borderColor={props.accent ? UI_THEME.accent : UI_THEME.frame}
-      paddingX={1}
-      flexDirection="column"
-    >
-      {props.title ? <AppText tone={props.accent ? "accent" : "muted"}>{props.title}</AppText> : null}
-      {props.title ? <AppText tone="muted">{horizontalRule(52)}</AppText> : null}
-      {props.children}
+    <Box flexDirection="column">
+      {props.title ? (
+        <Box justifyContent="center" marginBottom={0}>
+          <AppText tone="muted">──── </AppText>
+          <AppText tone="primary">{props.title}</AppText>
+          <AppText tone="muted"> ────</AppText>
+        </Box>
+      ) : null}
+      <Box
+        borderStyle="single"
+        borderColor={UI_THEME.frame}
+        paddingX={1}
+        paddingY={0}
+        flexDirection="column"
+      >
+        {props.children}
+      </Box>
     </Box>
   );
 }
@@ -463,59 +475,75 @@ export function PluroTuiApp(props: PluroTuiAppProps): React.ReactElement {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={UI_THEME.frame} paddingX={1} paddingY={0}>
-      <Box borderStyle="single" borderColor={UI_THEME.frame} paddingX={1} flexDirection="column">
-        <Box justifyContent="space-between">
-          <AppText tone="accent" bold>
-            ◈ Pluro Terminal Console v{props.version}
-          </AppText>
-          <AppText tone="muted">{shortTimestamp(new Date().toISOString())}</AppText>
+    <Box flexDirection="column" paddingX={1} paddingY={0} height={terminalHeight > 10 ? terminalHeight - 1 : "100%"}>
+      <Box justifyContent="center">
+        <AppText tone="muted">{`────── pluro-${props.version} ──────`}</AppText>
+      </Box>
+
+      <Box borderStyle="single" borderColor={UI_THEME.frame} paddingX={1} flexDirection="column" marginTop={0} flexGrow={1}>
+        <Box marginBottom={1}>
+          {TABS.map((tab, index) => {
+            const selected = tab.id === activeTab;
+
+            return (
+              <Box key={tab.id}>
+                <AppText tone={selected ? "primary" : "muted"} bold={selected}>
+                  {tab.label}
+                </AppText>
+                {index < TABS.length - 1 ? <AppText tone="muted">  |  </AppText> : null}
+              </Box>
+            );
+          })}
+
+          <Box flexGrow={1} justifyContent="flex-end">
+            <AppText tone="muted">{truncateCell(props.dataDir, compactShell ? 44 : 84)}</AppText>
+          </Box>
         </Box>
-        <AppText tone="muted">Data root: {truncateCell(props.dataDir, compactShell ? 56 : 96)}</AppText>
-      </Box>
 
-      <Box marginTop={compactHeight ? 0 : 1} borderStyle="single" borderColor={UI_THEME.frame} paddingX={1}>
-        {TABS.map((tab, index) => {
-          const selected = tab.id === activeTab;
-          const label = `${index + 1}:${tab.label}`;
+        <Box flexDirection="column" flexGrow={1}>
+          {activeTab === "dashboard" ? (
+            <DashboardScreen
+              isActive
+              service={props.service}
+              discovery={props.discovery}
+              compactHeight={compactHeight}
+              onOpenTab={(tabId) => setActiveTabIndex(TABS.findIndex((tab) => tab.id === tabId))}
+            />
+          ) : null}
 
-          return (
-            <Box key={tab.id} marginRight={2}>
-              <AppText tone={selected ? "accent" : "muted"} bold={selected} inverse={selected}>
-                {selected ? ` ${label} ` : ` ${label} `}
-              </AppText>
-            </Box>
-          );
-        })}
-      </Box>
+          {activeTab === "conversations" ? (
+            <ConversationsScreen
+              isActive
+              service={props.service}
+              discovery={props.discovery}
+              defaultIde={props.defaultIde}
+              dataDir={props.dataDir}
+              compactHeight={compactHeight}
+            />
+          ) : null}
 
-      <Box marginTop={compactHeight ? 0 : 1} flexDirection="column" flexGrow={1}>
-        {activeTab === "dashboard" ? (
-          <DashboardScreen
-            isActive
-            service={props.service}
-            discovery={props.discovery}
-            compactHeight={compactHeight}
-            onOpenTab={(tabId) => setActiveTabIndex(TABS.findIndex((tab) => tab.id === tabId))}
-          />
-        ) : null}
+          {activeTab === "contexts" ? <ContextsScreen isActive service={props.service} compactHeight={compactHeight} /> : null}
+        </Box>
 
-        {activeTab === "conversations" ? (
-          <ConversationsScreen
-            isActive
-            service={props.service}
-            discovery={props.discovery}
-            defaultIde={props.defaultIde}
-            dataDir={props.dataDir}
-            compactHeight={compactHeight}
-          />
-        ) : null}
-
-        {activeTab === "contexts" ? <ContextsScreen isActive service={props.service} compactHeight={compactHeight} /> : null}
-      </Box>
-
-      <Box marginTop={compactHeight ? 0 : 1} borderStyle="single" borderColor={UI_THEME.frame} paddingX={1}>
-        <AppText tone="muted">Global keys: Tab/Shift+Tab panels | 1/2/3 jump | q quit</AppText>
+        <Box justifyContent="center" marginTop={1}>
+          <AppText tone="muted">─[</AppText>
+          <AppText tone="accent">Enter</AppText>
+          <AppText tone="muted"> ➔ </AppText>
+          <AppText tone="primary">Action</AppText>
+          <AppText tone="muted">]─[</AppText>
+          <AppText tone="accent">Tab</AppText>
+          <AppText tone="muted"> ➔ </AppText>
+          <AppText tone="primary">Next Tab</AppText>
+          <AppText tone="muted">]─[</AppText>
+          <AppText tone="accent">1-3</AppText>
+          <AppText tone="muted"> ➔ </AppText>
+          <AppText tone="primary">Jump</AppText>
+          <AppText tone="muted">]─[</AppText>
+          <AppText tone="accent">q</AppText>
+          <AppText tone="muted"> ➔ </AppText>
+          <AppText tone="primary">Quit</AppText>
+          <AppText tone="muted">]─</AppText>
+        </Box>
       </Box>
     </Box>
   );
@@ -624,57 +652,69 @@ function DashboardScreen(props: {
     { isActive: props.isActive }
   );
 
-  const operatorName = process.env.USERNAME ?? process.env.USER ?? "operator";
-  const stackedCards = terminalWidth < 132;
-  const showWhatsNewPanel = !props.compactHeight;
+  const ideRows: Array<{ name: string; count: number }> = [
+    { name: "cursor", count: summary.byIde.cursor },
+    { name: "vscode-copilot", count: summary.byIde["vscode-copilot"] },
+    { name: "antigravity", count: summary.byIde.antigravity }
+  ];
 
   return (
-    <Box flexDirection="column">
-      <Box flexDirection={stackedCards ? "column" : "row"}>
-        <Box flexGrow={1} marginRight={stackedCards ? 0 : 1}>
-          <Panel title="Session" accent>
-            <AppText tone="accent" bold>{`Welcome back, ${operatorName}`}</AppText>
-            <AppText tone="muted">Workspaces ready for cross-IDE transfer.</AppText>
-            {props.compactHeight ? (
-              <AppText tone="muted">
-                {`IDEs: Cursor ${summary.byIde.cursor > 0 ? "●" : "○"} | VS Code ${summary.byIde["vscode-copilot"] > 0 ? "●" : "○"} | Antigravity ${summary.byIde.antigravity > 0 ? "●" : "○"}`}
-              </AppText>
-            ) : (
-              <>
-                <Box marginTop={1}>
-                  <AppText tone="muted">Agentic IDEs</AppText>
-                </Box>
-                <AppText>{`Cursor ${summary.byIde.cursor > 0 ? "●" : "○"}`}</AppText>
-                <AppText>{`VS Code Copilot ${summary.byIde["vscode-copilot"] > 0 ? "●" : "○"}`}</AppText>
-                <AppText>{`Antigravity ${summary.byIde.antigravity > 0 ? "●" : "○"}`}</AppText>
-              </>
-            )}
-          </Panel>
+    <Box flexDirection="column" alignItems="center">
+      <Box flexDirection="column" alignItems="center" marginTop={props.compactHeight ? 0 : 2} marginBottom={props.compactHeight ? 1 : 2}>
+        <AppText tone="primary" bold>
+          {`
+       _                  
+      | |                 
+ _ __ | |_   _ _ __ ___   
+| '_ \\| | | | | '__/ _ \\  
+| |_) | | |_| | | | (_) | 
+| .__/|_|\\__,_|_|  \\___/  
+| |                       
+|_|                       
+          `.trimEnd()}
+        </AppText>
+        <Box marginTop={1}>
+          <AppText tone="primary">Share and transfer agent context </AppText>
+          <AppText tone="accent">like a boss.</AppText>
         </Box>
-
-        <Box flexGrow={1} marginTop={stackedCards ? 1 : 0}>
-          <Panel title="Recent Activity">
-            <AppText>{`Indexed conversations: ${summary.discoveredCount}`}</AppText>
-            <AppText>{`Recent contexts cached: ${summary.recentContextCount}`}</AppText>
-            <AppText>{`Confidence: high=${summary.confidence.high} medium=${summary.confidence.medium} low=${summary.confidence.low}`}</AppText>
-            <AppText tone="muted">Last scan: {shortTimestamp(summary.lastScannedAt)}</AppText>
-            <AppText tone="muted">Press r to refresh telemetry.</AppText>
-          </Panel>
+        <Box marginTop={1}>
+          <AppText tone="muted">https://github.com/ju4700/pluro-cli</AppText>
         </Box>
       </Box>
 
-      {showWhatsNewPanel ? (
-        <Box marginTop={1}>
-          <Panel title="What Is New">
-            <AppText tone="accent">/transfer panel now supports source+target workspace selection</AppText>
-            <AppText>/scan a selected source workspace directly before transfer</AppText>
-            <AppText>/inject with policy, scope, skip mode, and tag controls</AppText>
-            <AppText tone="muted">Shortcuts: 2 transfer panel, 3 contexts panel, q quit</AppText>
-          </Panel>
-        </Box>
-      ) : null}
+      <Box borderStyle="single" borderColor={UI_THEME.frame} paddingX={1} flexDirection="column" width={60}>
+        <Box><AppText tone="muted">Conversations:</AppText><AppText tone="primary">{` ${summary.discoveredCount}`}</AppText></Box>
+        <Box><AppText tone="muted">Context Entries:</AppText><AppText tone="primary">{` ${summary.recentContextCount}`}</AppText></Box>
+        <Box><AppText tone="muted">Last Scan:    </AppText><AppText tone="primary">{` ${shortTimestamp(summary.lastScannedAt)}`}</AppText></Box>
+        <Box><AppText tone="muted">Confidence:   </AppText><AppText tone="primary">{` high=${summary.confidence.high} medium=${summary.confidence.medium} low=${summary.confidence.low}`}</AppText></Box>
+      </Box>
 
-      <Box marginTop={props.compactHeight ? 0 : 1}>
+      <Box marginTop={1} flexDirection="column" width={60}>
+        <Box justifyContent="center" marginBottom={0}>
+          <AppText tone="muted">───────────</AppText>
+          <AppText tone="primary"> Channels </AppText>
+          <AppText tone="muted">───────────</AppText>
+        </Box>
+        <Box borderStyle="single" borderColor={UI_THEME.frame} paddingX={1} flexDirection="column">
+          <SelectionRow>
+            <Box width={30}><AppText tone="muted">Source</AppText></Box>
+            <Box width={15}><AppText tone="muted">Status</AppText></Box>
+            <Box flexGrow={1}><AppText tone="muted">Count</AppText></Box>
+          </SelectionRow>
+          {ideRows.map((row) => {
+            const active = row.count > 0;
+            return (
+              <SelectionRow key={row.name}>
+                <Box width={30}><AppText tone="accent">{row.name}</AppText></Box>
+                <Box width={15}><AppText tone={active ? "success" : "muted"}>{active ? "ACTIVE" : "IDLE"}</AppText></Box>
+                <Box flexGrow={1}><AppText tone="primary">{String(row.count)}</AppText></Box>
+              </SelectionRow>
+            );
+          })}
+        </Box>
+      </Box>
+      
+      <Box marginTop={props.compactHeight ? 1 : 2}>
         <NoticeLine busy={busy} notice={notice} />
       </Box>
     </Box>
@@ -1241,13 +1281,13 @@ function ConversationsScreen(props: {
 
   const transferOptionsPanel = (
     <Panel title="Transfer Options">
-      <AppText>{`Policy: ${injectPolicy}`}</AppText>
-      <AppText>{`Scope: ${injectScope}`}</AppText>
-      <AppText>{`Skip unchanged: ${injectSkipUnchanged ? "yes" : "no"}`}</AppText>
-      <AppText>{`Tags: ${injectTags.length > 0 ? injectTags.join(",") : "none"}`}</AppText>
-      <Box marginTop={1}>
-        <AppText tone="muted">Shortcuts: p policy | g scope | u skip | t tags</AppText>
+      <Box flexDirection="column" paddingBottom={1}>
+        <AppText tone="primary">{`Policy: ${injectPolicy}`}</AppText>
+        <AppText tone="primary">{`Scope: ${injectScope}`}</AppText>
+        <AppText tone="primary">{`Skip unchanged: ${injectSkipUnchanged ? "yes" : "no"}`}</AppText>
+        <AppText tone="primary">{`Tags: ${injectTags.length > 0 ? injectTags.join(",") : "none"}`}</AppText>
       </Box>
+      <AppText tone="muted">Shortcuts: p policy | g scope | u skip | t tags</AppText>
     </Panel>
   );
 
@@ -1256,8 +1296,9 @@ function ConversationsScreen(props: {
       title={`Step ${activeStepIndex + 1}/${TRANSFER_STEPS.length} · ${TRANSFER_STEPS[activeStepIndex]?.label ?? "Unknown"}`}
       accent
     >
-      <AppText tone="muted">{horizontalRule(showSplitLayout ? 80 : 64)}</AppText>
-      <AppText tone="info">{stepHint}</AppText>
+      <Box paddingBottom={1}>
+        <AppText tone="info">{stepHint}</AppText>
+      </Box>
 
       {activeWindow.view.length === 0 ? (
         <AppText tone="muted">No options available for this step.</AppText>
@@ -1288,7 +1329,6 @@ function ConversationsScreen(props: {
               </Box>
             </SelectionRow>
           )}
-          <AppText tone="muted">{horizontalRule(showSplitLayout ? 80 : 64)}</AppText>
 
           {activeWindow.view.map((row, offset) => {
             const absoluteIndex = activeWindow.start + offset;
@@ -1580,10 +1620,12 @@ function ContextsScreen(props: {
   return (
     <Box flexDirection="column">
       <Panel title="Context Index" accent>
-        <AppText>{`Scope filter: ${scopeFilter}`}</AppText>
-        <AppText tone="muted">Keys: g scope | r refresh | up/down select | d delete | y/n confirm</AppText>
+        <Box flexDirection="column" paddingBottom={1}>
+          <AppText tone="primary">{`Scope filter: ${scopeFilter}`}</AppText>
+          <AppText tone="muted">Keys: g scope | r refresh | up/down select | d delete | y/n confirm</AppText>
+        </Box>
 
-        <Box marginTop={1} flexDirection="column">
+        <Box flexDirection="column">
           <SelectionRow>
             <Box width={12}>
               <AppText tone="muted">ID</AppText>
@@ -1598,7 +1640,6 @@ function ContextsScreen(props: {
               <AppText tone="muted">CONTENT</AppText>
             </Box>
           </SelectionRow>
-          <AppText tone="muted">{horizontalRule(Math.max(40, terminalWidth - 16))}</AppText>
 
           {rowWindow.view.length === 0 ? (
             <AppText tone="muted">No context entries for current scope filter.</AppText>
