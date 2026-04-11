@@ -675,10 +675,7 @@ function DashboardScreen(props: {
         </AppText>
         <Box marginTop={1}>
           <AppText tone="primary">Share and transfer agent context </AppText>
-          <AppText tone="accent">like a boss.</AppText>
-        </Box>
-        <Box marginTop={1}>
-          <AppText tone="muted">https://github.com/ju4700/pluro-cli</AppText>
+          <AppText tone="accent">between your llms</AppText>
         </Box>
       </Box>
 
