@@ -21,6 +21,33 @@ interface TuiCliOptions {
   ide: string;
 }
 
+const ALT_SCREEN_ENTER = "\u001B[?1049h\u001B[2J\u001B[H";
+const ALT_SCREEN_EXIT = "\u001B[?1049l";
+
+function shouldUseAltScreen(): boolean {
+  if (!process.stdout.isTTY) {
+    return false;
+  }
+
+  if (process.env.CI) {
+    return false;
+  }
+
+  if (process.env.PLURO_DISABLE_ALT_SCREEN === "1") {
+    return false;
+  }
+
+  return true;
+}
+
+function writeTerminalEscape(sequence: string): void {
+  try {
+    process.stdout.write(sequence);
+  } catch {
+    // Ignore write failures for terminals that do not support escape sequences.
+  }
+}
+
 function parseSupportedIde(value: string): SupportedIde {
   const normalized = value.trim().toLowerCase();
 
@@ -53,8 +80,13 @@ async function runTui(options: TuiCliOptions): Promise<void> {
 
   const service = new ContextService(store, encryption);
   service.init();
+  const useAltScreen = shouldUseAltScreen();
 
   try {
+    if (useAltScreen) {
+      writeTerminalEscape(ALT_SCREEN_ENTER);
+    }
+
     const discovery = new ConversationDiscoveryService(service);
     const app = render(
       React.createElement(PluroTuiApp, {
@@ -68,6 +100,10 @@ async function runTui(options: TuiCliOptions): Promise<void> {
 
     await app.waitUntilExit();
   } finally {
+    if (useAltScreen) {
+      writeTerminalEscape(ALT_SCREEN_EXIT);
+    }
+
     service.close();
   }
 }
