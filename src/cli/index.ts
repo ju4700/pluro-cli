@@ -2,6 +2,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 
 import { Command } from "commander";
@@ -1189,6 +1190,49 @@ async function withService(
   }
 }
 
+async function launchTui(command: Command): Promise<void> {
+  const options = getGlobalOptions(command);
+  const tuiEntry = path.resolve(__dirname, "..", "tui", "index.js");
+
+  if (!fs.existsSync(tuiEntry)) {
+    throw new Error(`TUI entry not found at ${tuiEntry}. Run 'npm run build' before launching pluro.`);
+  }
+
+  const args: string[] = [tuiEntry];
+
+  if (options.dataDir) {
+    args.push("--data-dir", options.dataDir);
+  }
+
+  if (options.dbPath) {
+    args.push("--db-path", options.dbPath);
+  }
+
+  if (options.passphrase) {
+    args.push("--passphrase", options.passphrase);
+  }
+
+  if (options.disableKeychain) {
+    args.push("--disable-keychain");
+  }
+
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    const child = spawn(process.execPath, args, {
+      stdio: "inherit",
+      env: process.env
+    });
+
+    child.on("error", reject);
+    child.on("exit", (code) => {
+      resolve(code ?? 0);
+    });
+  });
+
+  if (exitCode !== 0) {
+    process.exitCode = exitCode;
+  }
+}
+
 const program = new Command();
 
 program
@@ -1198,7 +1242,10 @@ program
   .option("--data-dir <path>", "Path to pluro data directory")
   .option("--db-path <path>", "Path to SQLite context database")
   .option("--passphrase <passphrase>", "Fallback passphrase when keychain is unavailable")
-  .option("--disable-keychain", "Disable OS keychain integration", false);
+  .option("--disable-keychain", "Disable OS keychain integration", false)
+  .action(async (_options: unknown, command: Command) => {
+    await launchTui(command);
+  });
 
 const contextCommand = program.command("context").description("Manage shared context entries");
 

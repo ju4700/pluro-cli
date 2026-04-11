@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "bin": {
     "pluro": "dist/cli/index.js",
-    "pluro-cli": "dist/cli/index.js",
+    "pluro-cli": "dist/tui/index.js",
     "pluro-tui": "dist/tui/index.js"
   },
   "scripts": {

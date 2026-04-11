@@ -60,9 +60,29 @@ pluro --help
 
 The package exposes `pluro`, `pluro-cli`, and `pluro-tui` command names.
 
+- `pluro`: classic command-oriented CLI (`context`, `snapshot`, `conversation`, `connector`, `daemon`)
+- `pluro-cli`: interactive terminal UI launcher
+- `pluro-tui`: explicit interactive terminal UI launcher (same UI as `pluro-cli`)
+
+Running `pluro` without a subcommand now launches the TUI. Use `pluro <command>` for command-mode workflows.
+
 ## Terminal UI (Preview)
 
+The TUI now opens on a dashboard-first landing screen with a card-style console layout inspired by premium terminal products.
+
 Launch the full-screen terminal UI:
+
+```bash
+pluro
+```
+
+or
+
+```bash
+pluro-cli --ide vscode-copilot
+```
+
+Equivalent explicit launcher:
 
 ```bash
 pluro-tui --ide vscode-copilot
@@ -71,29 +91,29 @@ pluro-tui --ide vscode-copilot
 Global keys:
 
 - `Tab` / `Shift+Tab`: switch panels
-- `1` / `2` / `3`: jump to Dashboard, Conversations, Contexts
+- `1` / `2` / `3`: jump to Dashboard, Transfer, Contexts
 - `q`: quit
 
-Conversation panel keys:
+Transfer panel keys:
 
-- `s`: scan selected IDE
-- `i`: cycle IDE filter
-- `c`: cycle confidence filter
-- `o`: cycle source filter
-- `/`: edit project text query filter
-- `f`: edit source text query filter
-- `e`: clear text query filters
-- `r`: refresh indexed rows
-- `Enter`: open inject options modal for selected conversation
-
-Inject modal keys:
-
+- `Up` / `Down`: choose option in current step
+- `Enter`: confirm current step
+- `Left` / `Right` or `b` / `n`: move between steps
+- `s`: scan selected source workspace
+- `r`: refresh IDE/workspace/conversation catalog
 - `p`: cycle conflict policy (`keep-both`, `lww`)
 - `g`: cycle import scope (`project`, `session`, `global`)
 - `u`: toggle skip unchanged mode
-- `t`: edit comma-separated tags
-- `Enter`: confirm injection
-- `Esc`: cancel modal
+- `t`: edit comma-separated transfer tags
+
+Transfer flow in the UI:
+
+1. Select source IDE detected on your machine.
+2. Select source workspace.
+3. Select discovered conversation.
+4. Select target IDE.
+5. Select target workspace.
+6. Confirm inject to transfer into target IDE profile export.
 
 Context panel keys:
 
