@@ -454,6 +454,27 @@ Status command failure flags:
 - `npm run verify:ci`: CI-equivalent local gate (`typecheck`, `test`, `verify:mcp`)
 - `npm run verify:release-tag -- vX.Y.Z`: ensure pushed release tag matches package version
 
+## Versioning and Stability
+
+Pluro follows [Semantic Versioning](https://semver.org/) for public interfaces.
+
+- Patch releases (`x.y.Z`) are for fixes and should not intentionally break existing workflows.
+- Minor releases (`x.Y.z`) may add commands, flags, endpoints, and output fields in a backward-compatible way.
+- Major releases (`X.y.z`) may include breaking changes.
+
+Public interface commitments within a major version:
+
+- CLI command names and documented flags.
+- Daemon HTTP endpoint paths and documented request/response fields.
+- MCP tool names and documented payload fields.
+- `--format summary` machine-readable output remains backward-compatible; new fields may be added.
+
+When possible, breaking removals are preceded by a deprecation notice in release notes before the next major release.
+
+## Security
+
+For supported versions and responsible vulnerability reporting, see [SECURITY.md](SECURITY.md).
+
 ## Publishing
 
 1. Create an npm token in npm account settings with publish permissions and 2FA bypass for publishing.
@@ -492,6 +513,18 @@ Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 - `src/daemon`: daemon protocol and server
 - `src/adapters`: tool adapter profiles and file-sync helpers
 - `src/sdk`: programmatic client wrapper
+
+## Extending Pluro
+
+Pluro is designed so most new IDE/tool integrations start with adapter profiles, not core changes.
+
+Recommended extension pattern:
+
+1. Define or update profile templates in `src/adapters/profiles.ts`.
+2. Keep profile metadata explicit (`syncMode`, inbound/outbound snapshot locations, and notes).
+3. Validate profile health with `pluro connector status` before adding new behavior.
+4. Add or update tests under `src/tests` for command routing and integration behavior.
+5. Run `npm run verify:ci` and `npm run verify:mcp` before submitting changes.
 
 ## Notes
 

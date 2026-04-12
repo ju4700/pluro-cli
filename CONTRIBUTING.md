@@ -39,7 +39,17 @@ Before opening a pull request, run:
 - Keep changes focused and small when possible.
 - Add tests for behavior changes.
 - Update README when command behavior or workflows change.
+- Preserve backward compatibility for documented CLI/daemon/MCP interfaces unless a breaking change is explicitly planned for a major release.
 - Ensure verify:ci passes locally.
+
+## Extension Workflow
+
+For adding IDE/tool integrations, prefer extending adapter profiles before changing core services.
+
+1. Start with profile updates in `src/adapters/profiles.ts`.
+2. Verify behavior with `pluro connector status` and targeted tests.
+3. Add integration coverage in `src/tests` when behavior crosses CLI/daemon/MCP boundaries.
+4. Re-run the full local quality gate (`npm run verify:ci`).
 
 ## Release Process
 
@@ -62,3 +72,4 @@ Release tags are validated against package.json version using scripts/verify-rel
 
 - Never commit credentials.
 - GitHub Actions release requires NPM_TOKEN secret in repository settings.
+- Report vulnerabilities through the private GitHub Security advisory flow described in `SECURITY.md`.
