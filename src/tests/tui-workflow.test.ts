@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import type { DiscoveredConversation } from "../core/types";
@@ -66,6 +67,32 @@ test("workspace options merge machine roots and discovered metadata", () => {
     assert.ok(options.some((option) => option.source === "machine-workspace"));
     assert.ok(options.some((option) => option.source === "discovered-project"));
     assert.ok(options.some((option) => option.workspaceId === "workspace-001"));
+    assert.ok(options.some((option) => (option.conversationCount ?? 0) > 0));
+  });
+});
+
+test("workspace options show folder name when workspace.json is present", () => {
+  withTempDir((tempDir) => {
+    const workspaceStorageRoot = path.join(tempDir, "Code", "User", "workspaceStorage");
+    const workspaceId = "workspace-002";
+    const machineWorkspacePath = path.join(workspaceStorageRoot, workspaceId);
+    const projectPath = path.join(tempDir, "project-beta");
+
+    fs.mkdirSync(machineWorkspacePath, { recursive: true });
+    fs.mkdirSync(projectPath, { recursive: true });
+
+    fs.writeFileSync(
+      path.join(machineWorkspacePath, "workspace.json"),
+      `${JSON.stringify({ folder: pathToFileURL(projectPath).toString() }, null, 2)}\n`,
+      "utf8"
+    );
+
+    const options = buildWorkspaceOptions([workspaceStorageRoot], []);
+    const workspaceOption = options.find((option) => option.workspaceId === workspaceId);
+
+    assert.ok(workspaceOption);
+    assert.equal(workspaceOption?.projectPath, path.resolve(projectPath));
+    assert.ok((workspaceOption?.label ?? "").includes("project-beta"));
   });
 });
 

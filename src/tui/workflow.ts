@@ -35,6 +35,7 @@ export interface WorkspaceOption {
   projectPath?: string;
   projectGroup?: string;
   workspaceId?: string;
+  conversationCount?: number;
 }
 
 export interface AdapterExportResult {
@@ -80,6 +81,94 @@ function safeDirectoryChildren(rootPath: string): string[] {
   } catch {
     return [];
   }
+}
+
+function decodeFileUri(value: string): string | undefined {
+  const raw = value.trim();
+  if (!raw.startsWith("file://")) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "file:") {
+      return undefined;
+    }
+
+    let pathname = decodeURIComponent(parsed.pathname);
+    if (process.platform === "win32") {
+      if (pathname.startsWith("/")) {
+        pathname = pathname.slice(1);
+      }
+
+      pathname = pathname.replace(/\//g, path.sep);
+    }
+
+    return path.resolve(pathname);
+  } catch {
+    return undefined;
+  }
+}
+
+function readWorkspaceProjectPath(workspacePath: string): string | undefined {
+  const workspaceMetadataFile = path.join(workspacePath, "workspace.json");
+  if (!fs.existsSync(workspaceMetadataFile)) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(workspaceMetadataFile, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.folder === "string" && record.folder.trim().length > 0) {
+      const fromUri = decodeFileUri(record.folder);
+      if (fromUri) {
+        return fromUri;
+      }
+
+      if (fs.existsSync(record.folder)) {
+        return path.resolve(record.folder);
+      }
+    }
+
+    const workspace = record.workspace;
+    if (typeof workspace === "string" && workspace.trim().length > 0) {
+      const fromUri = decodeFileUri(workspace);
+      if (fromUri) {
+        return fromUri;
+      }
+    }
+
+    if (workspace && typeof workspace === "object" && !Array.isArray(workspace)) {
+      const configPath = (workspace as Record<string, unknown>).configPath;
+      if (typeof configPath === "string" && configPath.trim().length > 0) {
+        const fromUri = decodeFileUri(configPath);
+        if (fromUri) {
+          return path.dirname(fromUri);
+        }
+
+        if (fs.existsSync(configPath)) {
+          return path.dirname(path.resolve(configPath));
+        }
+      }
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function uniqueScanRoots(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value && value.length > 0)))];
+}
+
+function baseNameOrFallback(filePath: string, fallback: string): string {
+  const name = path.basename(filePath).trim();
+  return name.length > 0 ? name : fallback;
 }
 
 function upsertWorkspaceOption(map: Map<string, WorkspaceOption>, option: WorkspaceOption): void {
@@ -138,12 +227,18 @@ export function buildWorkspaceOptions(
 
       for (const workspacePath of workspaces) {
         const workspaceId = path.basename(workspacePath);
+        const workspaceProjectPath = readWorkspaceProjectPath(workspacePath);
+        const displayName = workspaceProjectPath
+          ? baseNameOrFallback(workspaceProjectPath, workspaceId)
+          : workspaceId;
+
         upsertWorkspaceOption(options, {
           id: `workspace:${normalizeAbsolutePath(workspacePath)}`,
-          label: `Workspace ${workspaceId} · ${shortenPath(normalizedRoot, 44)}`,
+          label: `Workspace ${displayName} · ${workspaceId}`,
           source: "machine-workspace",
-          scanRoots: [workspacePath],
-          workspaceId
+          scanRoots: uniqueScanRoots([workspacePath, workspaceProjectPath]),
+          workspaceId,
+          projectPath: workspaceProjectPath
         });
       }
     }
@@ -167,18 +262,24 @@ export function buildWorkspaceOptions(
 
     if (metadataWorkspaceId && metadataSourceRoot) {
       const workspacePath = path.resolve(metadataSourceRoot, metadataWorkspaceId);
+      const workspaceProjectPath = readWorkspaceProjectPath(workspacePath);
       const scanRoots = fs.existsSync(workspacePath)
-        ? [workspacePath]
+        ? uniqueScanRoots([workspacePath, workspaceProjectPath])
         : fs.existsSync(metadataSourceRoot)
-          ? [path.resolve(metadataSourceRoot)]
+          ? uniqueScanRoots([path.resolve(metadataSourceRoot)])
           : [];
+
+      const displayName = workspaceProjectPath
+        ? baseNameOrFallback(workspaceProjectPath, metadataWorkspaceId)
+        : metadataWorkspaceId;
 
       upsertWorkspaceOption(options, {
         id: `discovered-workspace:${normalizeAbsolutePath(workspacePath)}`,
-        label: `Indexed workspace ${metadataWorkspaceId} · ${shortenPath(metadataSourceRoot, 40)}`,
+        label: `Indexed workspace ${displayName} · ${metadataWorkspaceId}`,
         source: "discovered-workspace",
         scanRoots,
-        workspaceId: metadataWorkspaceId
+        workspaceId: metadataWorkspaceId,
+        projectPath: workspaceProjectPath
       });
     }
 
@@ -204,7 +305,14 @@ export function buildWorkspaceOptions(
   });
 
   if (sortedOptions.length > 0) {
-    return sortedOptions;
+    return sortedOptions.map((option) => ({
+      ...option,
+      conversationCount: conversations.reduce(
+        (count, conversation) =>
+          count + (conversationMatchesWorkspace(conversation, option) ? 1 : 0),
+        0
+      )
+    }));
   }
 
   return [
@@ -212,7 +320,8 @@ export function buildWorkspaceOptions(
       id: "fallback:none",
       label: "No workspace discovered yet",
       source: "fallback",
-      scanRoots: knownRoots
+      scanRoots: knownRoots,
+      conversationCount: 0
     }
   ];
 }

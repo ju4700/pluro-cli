@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import { FileAdapterEngine } from "../adapters/file-sync";
@@ -61,6 +62,52 @@ function writeConversationFixture(
   fs.writeFileSync(path.join(rootDir, "conversation.json"), `${JSON.stringify(fixture, null, 2)}\n`, "utf8");
 }
 
+function writeVsCodeChatSessionFixture(options: {
+  workspaceStorageRoot: string;
+  workspaceId: string;
+  projectPath: string;
+  sessionId: string;
+  customTitle?: string;
+}): void {
+  const workspacePath = path.join(options.workspaceStorageRoot, options.workspaceId);
+  const chatSessionsPath = path.join(workspacePath, "chatSessions");
+
+  fs.mkdirSync(chatSessionsPath, { recursive: true });
+  fs.mkdirSync(options.projectPath, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(workspacePath, "workspace.json"),
+    `${JSON.stringify({
+      folder: pathToFileURL(options.projectPath).toString()
+    }, null, 2)}\n`,
+    "utf8"
+  );
+
+  const sessionPayload = {
+    sessionId: options.sessionId,
+    customTitle: options.customTitle,
+    version: 1,
+    requests: [
+      {
+        requestId: "req-1",
+        modelId: "gpt-4.1",
+        message: {
+          text: "Can we make this scanner smarter?"
+        },
+        response: {
+          value: ["Yes, parse chat session request arrays and map workspace paths."]
+        }
+      }
+    ]
+  };
+
+  fs.writeFileSync(
+    path.join(chatSessionsPath, `${options.sessionId}.json`),
+    `${JSON.stringify(sessionPayload, null, 2)}\n`,
+    "utf8"
+  );
+}
+
 test("conversation scan assigns high confidence for explicit project metadata", () => {
   withTempDir((tempDir) => {
     const dataDir = path.join(tempDir, "pluro-data");
@@ -97,6 +144,58 @@ test("conversation scan assigns high confidence for explicit project metadata", 
     assert.equal(conversation?.projectConfidence, "high");
     assert.equal(conversation?.projectSource, "metadata");
     assert.equal(conversation?.projectGroup, conversation?.projectPath);
+  });
+});
+
+test("conversation scan parses VS Code chatSessions requests and resolves workspace folder path", () => {
+  withTempDir((tempDir) => {
+    const dataDir = path.join(tempDir, "pluro-data");
+    const scanRoot = path.join(tempDir, "Code", "User", "workspaceStorage");
+    const workspaceId = "workspace-123";
+    const projectPath = path.join(tempDir, "repo-chat");
+
+    writeVsCodeChatSessionFixture({
+      workspaceStorageRoot: scanRoot,
+      workspaceId,
+      projectPath,
+      sessionId: "session-abc",
+      customTitle: "Fix discovery gaps"
+    });
+
+    const scanResult = runCli([
+      "--data-dir",
+      dataDir,
+      "conversation",
+      "scan",
+      "--ide",
+      "vscode-copilot",
+      "--root",
+      scanRoot,
+      "--format",
+      "json"
+    ]);
+
+    assert.equal(scanResult.code, 0, scanResult.stderr);
+
+    const scanPayload = JSON.parse(scanResult.stdout) as {
+      discovered: number;
+      conversations: Array<{
+        title: string;
+        projectPath?: string;
+        projectConfidence?: string;
+        projectSource?: string;
+        metadata: Record<string, string>;
+      }>;
+    };
+
+    assert.equal(scanPayload.discovered, 1);
+    const conversation = scanPayload.conversations[0];
+    assert.equal(conversation?.title, "Fix discovery gaps");
+    assert.equal(conversation?.projectPath, path.resolve(projectPath));
+    assert.equal(conversation?.projectConfidence, "high");
+    assert.equal(conversation?.projectSource, "workspace-metadata");
+    assert.equal(conversation?.metadata.workspaceId, workspaceId);
+    assert.equal(conversation?.metadata.model, "gpt-4.1");
   });
 });
 

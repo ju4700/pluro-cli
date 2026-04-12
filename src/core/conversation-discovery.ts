@@ -20,6 +20,7 @@ const DEFAULT_MAX_FILES = 5000;
 const DEFAULT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const MAX_SCAN_FILE_LIMIT = 20000;
 const MAX_TITLE_LENGTH = 120;
+const MAX_MESSAGE_LENGTH = 4000;
 const DIRECTORY_EXCLUSIONS = new Set([
   ".git",
   "node_modules",
@@ -144,6 +145,42 @@ function toSafeMetadataValue(value: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function truncateMessage(value: string): string {
+  const clean = value.trim();
+  if (clean.length <= MAX_MESSAGE_LENGTH) {
+    return clean;
+  }
+
+  return `${clean.slice(0, MAX_MESSAGE_LENGTH - 1)}~`;
+}
+
+function fileUriToAbsolutePath(value: string): string | undefined {
+  const raw = value.trim();
+  if (!raw.startsWith("file://")) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "file:") {
+      return undefined;
+    }
+
+    let pathname = decodeURIComponent(parsed.pathname);
+    if (process.platform === "win32") {
+      if (pathname.startsWith("/")) {
+        pathname = pathname.slice(1);
+      }
+
+      pathname = pathname.replace(/\//g, path.sep);
+    }
+
+    return toAbsoluteNormalized(pathname);
+  } catch {
+    return undefined;
+  }
 }
 
 function extractWorkspaceIdFromPath(filePath: string): string | undefined {
@@ -565,6 +602,11 @@ export class ConversationDiscoveryService {
       return [];
     }
 
+    if (Array.isArray(payload.requests)) {
+      const conversation = this.toConversationFromRequestSession(payload, filePath);
+      return conversation ? [conversation] : [];
+    }
+
     if (Array.isArray(payload.conversations)) {
       return payload.conversations
         .map((item, index) => this.toConversationFromObject(item, `conversation-${index}`, filePath))
@@ -573,6 +615,145 @@ export class ConversationDiscoveryService {
 
     const singleConversation = this.toConversationFromObject(payload, "conversation", filePath);
     return singleConversation ? [singleConversation] : [];
+  }
+
+  private toConversationFromRequestSession(
+    payload: Record<string, unknown>,
+    filePath: string
+  ): ParsedConversation | null {
+    const requests = Array.isArray(payload.requests) ? payload.requests : [];
+    const messages: string[] = [];
+    let model: string | undefined;
+
+    for (const item of requests) {
+      if (!isRecord(item)) {
+        continue;
+      }
+
+      const userText = this.extractRequestUserText(item);
+      if (userText) {
+        messages.push(userText);
+      }
+
+      const assistantText = this.extractRequestAssistantText(item);
+      if (assistantText) {
+        messages.push(assistantText);
+      }
+
+      if (!model) {
+        model = toSafeMetadataValue(item.modelId) ?? toSafeMetadataValue(item.model);
+      }
+    }
+
+    const normalizedMessages = normalizeMessages(messages);
+    if (normalizedMessages.length === 0) {
+      return null;
+    }
+
+    const customTitle =
+      (typeof payload.customTitle === "string" && payload.customTitle.trim().length > 0
+        ? payload.customTitle.trim()
+        : undefined) ??
+      (typeof payload.title === "string" && payload.title.trim().length > 0 ? payload.title.trim() : undefined);
+
+    const metadata: Record<string, string> = {};
+    const sessionId = toSafeMetadataValue(payload.sessionId);
+    if (sessionId) {
+      metadata.sessionId = sessionId;
+    }
+
+    const createdAt = toSafeMetadataValue(payload.creationDate);
+    if (createdAt) {
+      metadata.originCreatedAt = createdAt;
+    }
+
+    if (model) {
+      metadata.model = model;
+    }
+
+    return {
+      conversationKey: sessionId ?? "chat-session",
+      title: trimTitle(customTitle ?? inferTitle(normalizedMessages, path.basename(filePath))),
+      projectPath: this.extractProjectPath(payload),
+      messages: normalizedMessages,
+      format: "vscode-chat-session",
+      metadata
+    };
+  }
+
+  private extractRequestUserText(payload: Record<string, unknown>): string | undefined {
+    const message = payload.message;
+    if (isRecord(message)) {
+      const direct = toSafeMetadataValue(message.text);
+      if (direct) {
+        return truncateMessage(direct);
+      }
+
+      if (Array.isArray(message.parts)) {
+        const parts = message.parts
+          .map((part) => this.extractMessageText(part))
+          .filter((part): part is string => Boolean(part));
+
+        if (parts.length > 0) {
+          return truncateMessage(parts.join(" "));
+        }
+      }
+    }
+
+    const fallback = this.extractMessageText(message);
+    return fallback ? truncateMessage(fallback) : undefined;
+  }
+
+  private extractRequestAssistantText(payload: Record<string, unknown>): string | undefined {
+    const response = payload.response;
+    if (isRecord(response)) {
+      const fromValue = this.extractAssistantResponseValue(response.value);
+      if (fromValue) {
+        return fromValue;
+      }
+    }
+
+    const result = payload.result;
+    if (isRecord(result)) {
+      const fromResult =
+        this.extractAssistantResponseValue(result.response) ??
+        this.extractAssistantResponseValue(result.message) ??
+        this.extractAssistantResponseValue(result);
+
+      if (fromResult) {
+        return fromResult;
+      }
+    }
+
+    return undefined;
+  }
+
+  private extractAssistantResponseValue(payload: unknown): string | undefined {
+    if (typeof payload === "string") {
+      return truncateMessage(payload);
+    }
+
+    if (Array.isArray(payload)) {
+      const parts = payload
+        .map((item) => {
+          if (typeof item === "string") {
+            return item.trim();
+          }
+
+          return this.extractMessageText(item) ?? "";
+        })
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+
+      if (parts.length === 0) {
+        return undefined;
+      }
+
+      return truncateMessage(parts[parts.length - 1] as string);
+    }
+
+    const extracted = this.extractMessageText(payload);
+    return extracted ? truncateMessage(extracted) : undefined;
   }
 
   private parseSessionLogPayload(payload: string, filePath: string): ParsedConversation[] {
@@ -648,6 +829,7 @@ export class ConversationDiscoveryService {
 
     const title =
       (typeof payload.title === "string" && payload.title.trim()) ||
+      (typeof payload.customTitle === "string" && payload.customTitle.trim()) ||
       (typeof payload.name === "string" && payload.name.trim()) ||
       inferTitle(messages, path.basename(filePath));
 
@@ -718,12 +900,32 @@ export class ConversationDiscoveryService {
       payload.text,
       payload.message,
       payload.prompt,
-      payload.response
+      payload.response,
+      payload.value,
+      payload.markdown,
+      payload.body
     ];
 
     for (const candidate of candidates) {
       if (typeof candidate === "string" && candidate.trim().length > 0) {
         return candidate.trim();
+      }
+
+      if (Array.isArray(candidate)) {
+        const parts = candidate
+          .map((item) => this.extractMessageText(item))
+          .filter((part): part is string => part !== undefined);
+
+        if (parts.length > 0) {
+          return parts.join(" ");
+        }
+      }
+
+      if (isRecord(candidate)) {
+        const nested = this.extractMessageText(candidate);
+        if (nested) {
+          return nested;
+        }
       }
     }
 
@@ -849,6 +1051,19 @@ export class ConversationDiscoveryService {
       };
     }
 
+    const workspaceProjectPath = this.resolveWorkspaceProjectPath(
+      options.sourceRoot,
+      options.workspaceId
+    );
+    if (workspaceProjectPath) {
+      return {
+        projectPath: workspaceProjectPath,
+        confidence: "high",
+        source: "workspace-metadata",
+        group: workspaceProjectPath
+      };
+    }
+
     const gitRoot = this.findNearestGitRoot(options.filePath, options.sourceRoot);
     if (gitRoot) {
       return {
@@ -884,6 +1099,62 @@ export class ConversationDiscoveryService {
       source: "unknown",
       group: `${options.ide}:root:${fallbackGroup}`
     };
+  }
+
+  private resolveWorkspaceProjectPath(sourceRoot: string, workspaceId?: string): string | undefined {
+    if (!workspaceId || sourceRoot.length === 0) {
+      return undefined;
+    }
+
+    const workspaceMetadataFile = path.join(sourceRoot, workspaceId, "workspace.json");
+    if (!fs.existsSync(workspaceMetadataFile)) {
+      return undefined;
+    }
+
+    try {
+      const payload = JSON.parse(fs.readFileSync(workspaceMetadataFile, "utf8")) as unknown;
+      if (!isRecord(payload)) {
+        return undefined;
+      }
+
+      const folderUri = toSafeMetadataValue(payload.folder);
+      if (folderUri) {
+        const decoded = fileUriToAbsolutePath(folderUri);
+        if (decoded) {
+          return decoded;
+        }
+
+        if (fs.existsSync(folderUri)) {
+          return toAbsoluteNormalized(folderUri);
+        }
+      }
+
+      const workspaceMetadata = payload.workspace;
+      if (typeof workspaceMetadata === "string") {
+        const decoded = fileUriToAbsolutePath(workspaceMetadata);
+        if (decoded) {
+          return decoded;
+        }
+      }
+
+      if (isRecord(workspaceMetadata)) {
+        const configPath = toSafeMetadataValue(workspaceMetadata.configPath);
+        if (configPath) {
+          const decoded = fileUriToAbsolutePath(configPath);
+          if (decoded) {
+            return toAbsoluteNormalized(path.dirname(decoded));
+          }
+
+          if (fs.existsSync(configPath)) {
+            return toAbsoluteNormalized(path.dirname(configPath));
+          }
+        }
+      }
+    } catch {
+      return undefined;
+    }
+
+    return undefined;
   }
 
   private findNearestGitRoot(filePath: string, sourceRoot: string): string | undefined {

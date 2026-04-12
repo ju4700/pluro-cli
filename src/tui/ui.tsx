@@ -230,7 +230,7 @@ function transferStepHint(step: TransferStepId): string {
   }
 
   if (step === "source-workspace") {
-    return "Choose a source workspace root to narrow the catalog.";
+    return "Choose a source workspace with discovered conversations to narrow the catalog.";
   }
 
   if (step === "conversation") {
@@ -246,6 +246,25 @@ function transferStepHint(step: TransferStepId): string {
   }
 
   return "Review policy and tags, then press Enter to execute transfer.";
+}
+
+function preferredWorkspaceIndex(workspaces: WorkspaceOption[]): number {
+  if (workspaces.length === 0) {
+    return 0;
+  }
+
+  let bestIndex = 0;
+  let bestCount = -1;
+
+  for (let index = 0; index < workspaces.length; index += 1) {
+    const count = workspaces[index]?.conversationCount ?? 0;
+    if (count > bestCount) {
+      bestCount = count;
+      bestIndex = index;
+    }
+  }
+
+  return bestIndex;
 }
 
 function workspaceSourceChip(source: WorkspaceOption["source"]): {
@@ -773,7 +792,15 @@ function ConversationsScreen(props: {
     const sourceRoots = availability.find((item) => item.ide === sourceIde)?.knownRoots ?? [];
     const nextSourceWorkspaces = buildWorkspaceOptions(sourceRoots, discoveredByIde[sourceIde]);
     setSourceWorkspaces(nextSourceWorkspaces);
-    setSourceWorkspaceIndex((current) => clampIndex(current, nextSourceWorkspaces.length));
+    setSourceWorkspaceIndex((current) => {
+      const clampedCurrent = clampIndex(current, nextSourceWorkspaces.length);
+      const currentCount = nextSourceWorkspaces[clampedCurrent]?.conversationCount ?? 0;
+      if (currentCount > 0) {
+        return clampedCurrent;
+      }
+
+      return preferredWorkspaceIndex(nextSourceWorkspaces);
+    });
 
     const targetRoots = availability.find((item) => item.ide === targetIde)?.knownRoots ?? [];
     const nextTargetWorkspaces = buildWorkspaceOptions(targetRoots, discoveredByIde[targetIde]);
@@ -1054,6 +1081,14 @@ function ConversationsScreen(props: {
           return;
         }
 
+        if ((selectedSourceWorkspace.conversationCount ?? 0) <= 0) {
+          setNotice({
+            tone: "error",
+            message: "No conversations found for this workspace. Pick another workspace or press s to rescan."
+          });
+          return;
+        }
+
         setActiveStepIndex(2);
         void refreshConversations();
         setNotice({
@@ -1137,17 +1172,22 @@ function ConversationsScreen(props: {
     }
 
     if (activeStep === "source-workspace") {
-      return sourceWorkspaces.map((item) => ({
-        key: `source-workspace:${item.id}`,
-        primary: item.label,
-        secondary: item.workspaceId ? `workspace ${item.workspaceId}` : item.source,
-        tertiary:
-          item.scanRoots.length > 0
-            ? truncateCell(item.scanRoots[0] ?? "", 56)
-            : "no scan roots",
-        chipLabel: workspaceSourceChip(item.source).label,
-        chipTone: workspaceSourceChip(item.source).tone
-      }));
+      return sourceWorkspaces.map((item) => {
+        const count = item.conversationCount ?? 0;
+
+        return {
+          key: `source-workspace:${item.id}`,
+          primary: item.label,
+          secondary: `${item.workspaceId ? `workspace ${item.workspaceId}` : item.source} · conv ${count}`,
+          tertiary:
+            item.scanRoots.length > 0
+              ? truncateCell(item.scanRoots[0] ?? "", 56)
+              : "no scan roots",
+          chipLabel: workspaceSourceChip(item.source).label,
+          chipTone: workspaceSourceChip(item.source).tone,
+          tone: count > 0 ? "primary" : "muted"
+        };
+      });
     }
 
     if (activeStep === "conversation") {
